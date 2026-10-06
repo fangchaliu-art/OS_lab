@@ -1,0 +1,14 @@
+# 构建产物（由 make 生成，不需要提交）
+obj/
+bin/
+
+# 评分脚本产生的中间文件
+.gdb.in
+.qemu.out
+
+# 调试与编辑器杂项
+*.o
+*.d
+cscope*
+tags
+.vscode/
