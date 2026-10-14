@@ -1,0 +1,9 @@
+/code/obj/
+/code/bin/
+/code/.gdb.in
+/code/.qemu.out
+/code/cscope*
+/code/tags
+.vscode/
+.DS_Store
+Thumbs.db
