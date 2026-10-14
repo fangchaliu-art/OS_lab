@@ -4,28 +4,37 @@
 #include <default_pmm.h>
 
 static free_area_t free_area;
-
+//property 记录该块包含的连续页面数量。
+//PageProperty 标志表示该页是空闲块的首页
 #define free_list (free_area.free_list)
+//按物理地址从低到高排列的空闲块链表，每个节点对应一个空闲块的首页
 #define nr_free (free_area.nr_free)
+//表示当前空闲物理页的总数，而不是空闲块数量
 
+//将空闲链表初始化为空，将空闲页总数设为零。没有加入实际的可用页面
 static void
 default_init(void) {
     list_init(&free_list);
     nr_free = 0;
 }
-
+//初始化空闲页
 static void
 default_init_memmap(struct Page *base, size_t n) {
+   //检查 n > 0，并确认这些页面原先处于保留状态
     assert(n > 0);
     struct Page *p = base;
+    //遍历页面，清除原有标志和 property，将引用计数设为零。
     for (; p != base + n; p ++) {
         assert(PageReserved(p));
         p->flags = p->property = 0;
         set_page_ref(p, 0);
     }
+    //设置 base->property = n，并为首页设置 PageProperty 标志。
     base->property = n;
     SetPageProperty(base);
+    //将空闲页总数 nr_free 增加 n
     nr_free += n;
+    //按地址顺序，将空闲块首页插入 free_list
     if (list_empty(&free_list)) {
         list_add(&free_list, &(base->page_link));
     } else {
@@ -41,7 +50,7 @@ default_init_memmap(struct Page *base, size_t n) {
         }
     }
 }
-
+//分配连续物理页
 static struct Page *
 default_alloc_pages(size_t n) {
     assert(n > 0);
@@ -52,6 +61,7 @@ default_alloc_pages(size_t n) {
     list_entry_t *le = &free_list;
     while ((le = list_next(le)) != &free_list) {
         struct Page *p = le2page(le, page_link);
+        //找到第一个大小不小于 n 的块后就停止搜索
         if (p->property >= n) {
             page = p;
             break;
@@ -61,7 +71,9 @@ default_alloc_pages(size_t n) {
         list_entry_t* prev = list_prev(&(page->page_link));
         list_del(&(page->page_link));
         if (page->property > n) {
+            //新首页为 page + n
             struct Page *p = page + n;
+            //大小为原大小减去 n
             p->property = page->property - n;
             SetPageProperty(p);
             list_add(prev, &(p->page_link));
@@ -71,7 +83,7 @@ default_alloc_pages(size_t n) {
     }
     return page;
 }
-
+//回收页面与合并
 static void
 default_free_pages(struct Page *base, size_t n) {
     assert(n > 0);
@@ -79,18 +91,23 @@ default_free_pages(struct Page *base, size_t n) {
     for (; p != base + n; p ++) {
         assert(!PageReserved(p) && !PageProperty(p));
         p->flags = 0;
+        //引用计数归零
         set_page_ref(p, 0);
     }
+    //组织为一个新的空闲块
     base->property = n;
     SetPageProperty(base);
     nr_free += n;
 
+   //按空闲块的物理地址顺序插入空闲链表
     if (list_empty(&free_list)) {
         list_add(&free_list, &(base->page_link));
     } else {
+        //让 le 先指向链表头。
         list_entry_t* le = &free_list;
         while ((le = list_next(le)) != &free_list) {
             struct Page* page = le2page(le, page_link);
+            //找到了地址比 base 大的块：插到它前面
             if (base < page) {
                 list_add_before(le, &(base->page_link));
                 break;
@@ -100,9 +117,11 @@ default_free_pages(struct Page *base, size_t n) {
         }
     }
 
+    //再分别检查与前驱、后继块是否在物理地址上连续
     list_entry_t* le = list_prev(&(base->page_link));
     if (le != &free_list) {
         p = le2page(le, page_link);
+        //如果前驱块的结束位置恰好是当前块的起始位置
         if (p + p->property == base) {
             p->property += base->property;
             ClearPageProperty(base);
