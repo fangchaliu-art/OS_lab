@@ -99,16 +99,16 @@ static void page_init(void) {
      //基址或容量为零意味着内存信息无效
     if (mem_base == 0 || mem_size == 0) {
         panic("page_init: invalid memory info (base=0x%016lx, size=0x%016lx)",
-              mem_base, mem_size);
+              (unsigned long)mem_base, (unsigned long)mem_size);
     }
     if (mem_base < DRAM_BASE) {
         panic("page_init: memory base 0x%016lx is below DRAM_BASE 0x%016lx",
-              mem_base, DRAM_BASE);
+              (unsigned long)mem_base, (unsigned long)DRAM_BASE);
     }
     //检查加法溢出
     if (mem_size > ~(uint64_t)0 - mem_base) {
         panic("page_init: memory range overflow (base=0x%016lx, size=0x%016lx)",
-              mem_base, mem_size);
+              (unsigned long)mem_base, (unsigned long)mem_size);
     }
     probe_end = mem_base + mem_size;
 
@@ -116,7 +116,7 @@ static void page_init(void) {
      * descriptor array cannot be placed consistently with the boot mapping. */
     if (mem_base > KERNEL_BEGIN_PADDR) {
         panic("page_init: memory base 0x%016lx is above kernel image 0x%016lx",
-              mem_base, KERNEL_BEGIN_PADDR);
+              (unsigned long)mem_base, (unsigned long)KERNEL_BEGIN_PADDR);
     }
 
     /* Never manage memory above the fixed management upper bound; the end
@@ -129,7 +129,7 @@ static void page_init(void) {
     mem_end = ROUNDDOWN(mem_end, PGSIZE);
     if (mem_end <= mem_base || mem_end <= DRAM_BASE) {
         panic("page_init: no usable physical memory in [0x%016lx, 0x%016lx)",
-              mem_base, probe_end);
+              (unsigned long)mem_base, (unsigned long)probe_end);
     }
 
     /* npage is the upper bound of physical page numbers, not a free count. */
@@ -156,7 +156,7 @@ static void page_init(void) {
     //检查整个数组能否放进管理范围
     if (desc_size > mem_end || pages_pa > mem_end - desc_size) {
         panic("page_init: page descriptors [0x%016lx, +0x%lx) do not fit below 0x%016lx",
-              pages_pa, (unsigned long)desc_size, mem_end);
+              (unsigned long)pages_pa, (unsigned long)desc_size, (unsigned long)mem_end);
     }
 
     /* The descriptor memory is not guaranteed to be zero, so clear it
@@ -181,15 +181,16 @@ static void page_init(void) {
     }
 
     cprintf("physical memory detected: [0x%016lx, 0x%016lx)\n",
-            mem_base, probe_end);
+            (unsigned long)mem_base, (unsigned long)probe_end);
     cprintf("physical memory managed:  [0x%016lx, 0x%016lx), npage: %lu\n",
-            mem_base, mem_end, (unsigned long)npage);
+            (unsigned long)mem_base, (unsigned long)mem_end, (unsigned long)npage);
     cprintf("reserved: [0x%016lx, 0x%016lx) (firmware+kernel+Page array)\n",
-            DRAM_BASE, free_start_pa);
+            (unsigned long)DRAM_BASE, (unsigned long)free_start_pa);
     cprintf("free:     [0x%016lx, 0x%016lx), %lu pages\n",
-            free_start_pa, mem_end, (unsigned long)nr_free_pages_cnt);
+            (unsigned long)free_start_pa, (unsigned long)mem_end, (unsigned long)nr_free_pages_cnt);
     cprintf("pages: 0x%016lx (physical 0x%016lx), %lu descriptors, kernel end 0x%016lx\n",
-            (uintptr_t)pages, pages_pa, (unsigned long)nr_descs, kernel_end_pa);
+            (unsigned long)(uintptr_t)pages, (unsigned long)pages_pa, (unsigned long)nr_descs,
+            (unsigned long)kernel_end_pa);
 
     /* Register the free block only when at least one complete page exists. */
     if (nr_free_pages_cnt > 0) {

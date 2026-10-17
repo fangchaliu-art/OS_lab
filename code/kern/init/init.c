@@ -1,6 +1,8 @@
 #include <console.h>
 #include <defs.h>
 #include <pmm.h>
+#include <slub.h>
+#include <slub_test.h>
 #include <stdio.h>
 #include <string.h>
 #include <dtb.h>
@@ -38,6 +40,9 @@ int kern_init(void) {
 
     // grade_backtrace();
     pmm_init();  // init physical memory management
+
+    slub_init();  // init slub object allocator (lab2 challenge)
+    slub_check();  // run slub behavior tests (lab2 challenge)
 
     /* do nothing */
     while (1)
