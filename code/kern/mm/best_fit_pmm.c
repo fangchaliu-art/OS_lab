@@ -5,6 +5,15 @@
 
 //lab2 function2-2 YOUR CODE
 
+// Best-Fit 分配器内部状态（与 default_pmm.c 第 6-11 行同一套约定）。
+// 此处先补上静态状态和宏，使框架自带的两个测试函数能通过编译；
+// 成员二实现管理函数时直接复用这里的静态状态，不要另建。
+// 注意用 static：与 default_pmm.c 的同名全局变量互不冲突（GCC 10+ 默认 -fno-common）。
+static free_area_t free_area;
+
+#define free_list (free_area.free_list)
+#define nr_free (free_area.nr_free)
+
 // Framework tests: students must not modify basic_check or best_fit_check.
 static void
 basic_check(void) {
