@@ -1,0 +1,77 @@
+ffffffffc0200000 A BASE_ADDRESS
+ffffffffc0208010 0000000000000008 D SBI_CONSOLE_PUTCHAR
+ffffffffc02043c0 000000000000000c r __func__.0
+ffffffffc02043d0 000000000000000c r __func__.2
+ffffffffc02043e0 000000000000000c r __func__.3
+ffffffffc02043f0 000000000000000c r __func__.4
+ffffffffc0204400 000000000000000c r __func__.7
+ffffffffc02001ca 0000000000000054 T __panic
+ffffffffc0200fc6 000000000000000c T alloc_pages
+ffffffffc02006c0 00000000000000c8 t best_fit_alloc_pages
+ffffffffc0200788 000000000000071a t best_fit_check
+ffffffffc0200ea2 0000000000000092 t best_fit_free_pages
+ffffffffc02006a4 0000000000000012 t best_fit_init
+ffffffffc0200f34 0000000000000092 t best_fit_init_memmap
+ffffffffc02005d8 00000000000000cc t best_fit_insert_block
+ffffffffc02006b6 000000000000000a t best_fit_nr_free_pages
+ffffffffc0203640 0000000000000038 R best_fit_pmm_manager
+ffffffffc0208008 D boot_dtb
+ffffffffc0208000 D boot_hartid
+ffffffffc0207000 D boot_page_table_sv39
+ffffffffc0205000 D bootstack
+ffffffffc0207000 D bootstacktop
+ffffffffc020021e 0000000000000002 T cons_init
+ffffffffc0200220 0000000000000008 T cons_putc
+ffffffffc0200154 0000000000000036 T cprintf
+ffffffffc020011a 000000000000001a t cputch
+ffffffffc020018a 0000000000000040 T cputs
+ffffffffc0200228 000000000000039c T dtb_init
+ffffffffc0208018 D edata
+ffffffffc0239268 B end
+ffffffffc0204750 0000000000000038 r error_string
+ffffffffc0203074 T etext
+ffffffffc0208018 0000000000000018 b free_area
+ffffffffc0200fd2 000000000000000c T free_pages
+ffffffffc02005c4 000000000000000a T get_memory_base
+ffffffffc02005ce 000000000000000a T get_memory_size
+ffffffffc0239210 0000000000000004 b is_panic
+ffffffffc0200000 T kern_entry
+ffffffffc02000d8 0000000000000042 T kern_init
+ffffffffc0204410 0000000000000020 r large_sizes.1
+ffffffffc0204430 0000000000000020 r large_sizes.6
+ffffffffc0239218 0000000000000008 b memory_base
+ffffffffc0239220 0000000000000008 b memory_size
+ffffffffc0203062 0000000000000012 T memset
+ffffffffc0204798 0000000000000008 R nbase
+ffffffffc0239228 0000000000000008 B npage
+ffffffffc0200fde 000000000000000c T nr_free_pages
+ffffffffc0239230 0000000000000008 B pages
+ffffffffc0200fea 00000000000003b4 T pmm_init
+ffffffffc0239238 0000000000000008 B pmm_manager
+ffffffffc020004a 000000000000008e T print_kerninfo
+ffffffffc0202fae 0000000000000020 T printfmt
+ffffffffc0202be0 000000000000006c t printnum
+ffffffffc0239240 0000000000000008 B satp_physical
+ffffffffc0239248 0000000000000008 B satp_virtual
+ffffffffc0202fce 000000000000001a T sbi_console_putchar
+ffffffffc0204450 0000000000000050 r sizes.5
+ffffffffc02013f4 00000000000001b2 T slub_alloc
+ffffffffc0208030 00000000000001e0 b slub_caches
+ffffffffc0201806 00000000000013da T slub_check
+ffffffffc02015a6 000000000000013c T slub_free
+ffffffffc020139e 0000000000000056 T slub_init
+ffffffffc0203af8 00000000000000a0 r slub_sizes
+ffffffffc0239258 0000000000000008 b slub_test_baseline
+ffffffffc0239260 0000000000000008 b slub_test_nrec
+ffffffffc0208210 0000000000001000 b slub_test_probe
+ffffffffc0209210 0000000000030000 b slub_test_recs
+ffffffffc02044a0 00000000000000a0 r slub_test_sizes
+ffffffffc020301e 000000000000001e T strcmp
+ffffffffc0202fe8 000000000000001a T strlen
+ffffffffc020303c 0000000000000026 T strncmp
+ffffffffc0203002 000000000000001c T strnlen
+ffffffffc02016e2 000000000000009e t t_check_size.part.0
+ffffffffc0201780 0000000000000086 t t_probe_capacity.constprop.0
+ffffffffc0239250 0000000000000008 B va_pa_offset
+ffffffffc0200134 0000000000000020 T vcprintf
+ffffffffc0202c4c 0000000000000362 T vprintfmt

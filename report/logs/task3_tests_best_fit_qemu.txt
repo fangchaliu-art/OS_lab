@@ -1,0 +1,103 @@
++ cc kern/init/entry.S
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/init/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/init/entry.S -o obj/kern/init/entry.o
++ cc kern/init/init.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/init/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/init/init.c -o obj/kern/init/init.o
++ cc kern/libs/stdio.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/libs/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/libs/stdio.c -o obj/kern/libs/stdio.o
++ cc kern/debug/panic.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/debug/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/debug/panic.c -o obj/kern/debug/panic.o
++ cc kern/driver/console.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/driver/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/driver/console.c -o obj/kern/driver/console.o
++ cc kern/driver/dtb.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/driver/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/driver/dtb.c -o obj/kern/driver/dtb.o
++ cc kern/mm/best_fit_pmm.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/mm/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/mm/best_fit_pmm.c -o obj/kern/mm/best_fit_pmm.o
++ cc kern/mm/buddy_pmm.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/mm/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/mm/buddy_pmm.c -o obj/kern/mm/buddy_pmm.o
++ cc kern/mm/buddy_test.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/mm/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/mm/buddy_test.c -o obj/kern/mm/buddy_test.o
++ cc kern/mm/default_pmm.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/mm/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/mm/default_pmm.c -o obj/kern/mm/default_pmm.o
++ cc kern/mm/pmm.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/mm/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/mm/pmm.c -o obj/kern/mm/pmm.o
++ cc kern/mm/slub.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/mm/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/mm/slub.c -o obj/kern/mm/slub.o
++ cc kern/mm/slub_test.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ikern/mm/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/ -D ucore_test -Ikern/debug/ -Ikern/driver/ -Ikern/mm/ -Ikern/arch/ -c kern/mm/slub_test.c -o obj/kern/mm/slub_test.o
++ cc libs/printfmt.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ilibs/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/  -c libs/printfmt.c -o obj/libs/printfmt.o
++ cc libs/readline.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ilibs/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/  -c libs/readline.c -o obj/libs/readline.o
++ cc libs/sbi.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ilibs/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/  -c libs/sbi.c -o obj/libs/sbi.o
++ cc libs/string.c
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-gcc -Ilibs/ -mcmodel=medany -std=gnu99 -Wno-unused -Werror  -fno-builtin -Wall -O2 -nostdinc  -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/  -c libs/string.c -o obj/libs/string.o
++ ld bin/kernel
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-ld -m elf64lriscv -nostdlib --gc-sections -T tools/kernel.ld -o bin/kernel obj/kern/init/entry.o obj/kern/init/init.o obj/kern/libs/stdio.o obj/kern/debug/panic.o obj/kern/driver/console.o obj/kern/driver/dtb.o obj/kern/mm/best_fit_pmm.o obj/kern/mm/buddy_pmm.o obj/kern/mm/buddy_test.o obj/kern/mm/default_pmm.o obj/kern/mm/pmm.o obj/kern/mm/slub.o obj/kern/mm/slub_test.o obj/libs/printfmt.o obj/libs/readline.o obj/libs/sbi.o obj/libs/string.o
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-objcopy bin/kernel --strip-all -O binary bin/ucore.img
+/opt/qemu-4.1.1/bin/qemu-system-riscv64 \
+	-machine virt \
+	-nographic \
+	-bios default \
+	-device loader,file=bin/ucore.img,addr=0x80200000
+
+OpenSBI v0.4 (Jul  2 2019 11:53:53)
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name          : QEMU Virt Machine
+Platform HART Features : RV64ACDFIMSU
+Platform Max HARTs     : 8
+Current Hart           : 0
+Firmware Base          : 0x80000000
+Firmware Size          : 112 KB
+Runtime SBI Version    : 0.1
+
+PMP0: 0x0000000080000000-0x000000008001ffff (A)
+PMP1: 0x0000000000000000-0xffffffffffffffff (A,R,W,X)
+DTB Init
+HartID: 0
+DTB Address: 0x82200000
+Physical Memory from DTB:
+  Base: 0x0000000080000000
+  Size: 0x0000000008000000 (128 MB)
+  End:  0x0000000087ffffff
+DTB init completed
+(THU.CST) os is loading ...
+Special kernel symbols:
+  entry  0xffffffffc02000d8 (virtual)
+  etext  0xffffffffc0203074 (virtual)
+  edata  0xffffffffc0208018 (virtual)
+  end    0xffffffffc0239268 (virtual)
+Kernel executable memory footprint: 229KB
+memory management: best_fit_pmm_manager
+physical memory detected: [0x0000000080000000, 0x0000000088000000)
+physical memory managed:  [0x0000000080000000, 0x0000000088000000), npage: 557056
+reserved: [0x0000000080000000, 0x000000008037a000) (firmware+kernel+Page array)
+free:     [0x000000008037a000, 0x0000000088000000), 31878 pages
+pages: 0xffffffffc023a000 (physical 0x000000008023a000), 32768 descriptors, kernel end 0x0000000080239268
+grading: 1 / 6 points
+grading: 2 / 6 points
+grading: 3 / 6 points
+grading: 4 / 6 points
+grading: 5 / 6 points
+grading: 6 / 6 points
+check_alloc_page() succeeded!
+satp virtual address: 0xffffffffc0207000
+satp physical address: 0x0000000080207000
+slub: 20 size classes (16..1024), header 64 bytes, large-object threshold 1024, free-page baseline 31878
+[slub_test] start, baseline free pages = 31878
+[slub_test] case1 (basic & size boundaries): PASS
+[slub_test] case2 (object independence): PASS
+[slub_test] case3 (in-page reuse & cross-page): PASS
+[slub_test] case4 (reclaim): PASS
+[slub_test] case5: exhaustion reached after 1875 big objects
+[slub_test] case5 (failure & recovery): PASS
+[slub_test] ALL CASES PASSED
+qemu-system-riscv64: terminating on signal 15 from pid 594 (timeout)

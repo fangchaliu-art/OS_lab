@@ -1,0 +1,80 @@
++ cc kern/init/entry.S
++ cc kern/init/init.c
++ cc kern/libs/stdio.c
++ cc kern/debug/panic.c
++ cc kern/driver/console.c
++ cc kern/driver/dtb.c
++ cc kern/mm/best_fit_pmm.c
++ cc kern/mm/default_pmm.c
++ cc kern/mm/pmm.c
++ cc kern/mm/slub.c
++ cc kern/mm/slub_test.c
++ cc libs/printfmt.c
++ cc libs/readline.c
++ cc libs/sbi.c
++ cc libs/string.c
++ ld bin/kernel
+/home/luoisa/riscv-toolchain/bin/riscv64-unknown-elf-objcopy bin/kernel --strip-all -O binary bin/ucore.img
+
+OpenSBI v0.4 (Jul  2 2019 11:53:53)
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name          : QEMU Virt Machine
+Platform HART Features : RV64ACDFIMSU
+Platform Max HARTs     : 8
+Current Hart           : 0
+Firmware Base          : 0x80000000
+Firmware Size          : 112 KB
+Runtime SBI Version    : 0.1
+
+PMP0: 0x0000000080000000-0x000000008001ffff (A)
+PMP1: 0x0000000000000000-0xffffffffffffffff (A,R,W,X)
+DTB Init
+HartID: 0
+DTB Address: 0x82200000
+Physical Memory from DTB:
+  Base: 0x0000000080000000
+  Size: 0x0000000008000000 (128 MB)
+  End:  0x0000000087ffffff
+DTB init completed
+(THU.CST) os is loading ...
+Special kernel symbols:
+  entry  0xffffffffc02000d8 (virtual)
+  etext  0xffffffffc0203074 (virtual)
+  edata  0xffffffffc0208018 (virtual)
+  end    0xffffffffc0239268 (virtual)
+Kernel executable memory footprint: 229KB
+memory management: best_fit_pmm_manager
+physical memory detected: [0x0000000080000000, 0x0000000088000000)
+physical memory managed:  [0x0000000080000000, 0x0000000088000000), npage: 557056
+reserved: [0x0000000080000000, 0x000000008037a000) (firmware+kernel+Page array)
+free:     [0x000000008037a000, 0x0000000088000000), 31878 pages
+pages: 0xffffffffc023a000 (physical 0x000000008023a000), 32768 descriptors, kernel end 0x0000000080239268
+grading: 1 / 6 points
+grading: 2 / 6 points
+grading: 3 / 6 points
+grading: 4 / 6 points
+grading: 5 / 6 points
+grading: 6 / 6 points
+check_alloc_page() succeeded!
+satp virtual address: 0xffffffffc0207000
+satp physical address: 0x0000000080207000
+slub: 20 size classes (16..1024), header 64 bytes, large-object threshold 1024, free-page baseline 31878
+[slub_test] start, baseline free pages = 31878
+[slub_test] case1 (basic & size boundaries): PASS
+[slub_test] case2 (object independence): PASS
+[slub_test] case3 (in-page reuse & cross-page): PASS
+[slub_test] case4 (reclaim): PASS
+[slub_test] case5: exhaustion reached after 1875 big objects
+[slub_test] case5 (failure & recovery): PASS
+[slub_test] ALL CASES PASSED
+qemu-system-riscv64: terminating on signal 15 from pid 395 (make)
+
+Runner exit code: 124 (timeout 124 expected after kernel idle loop)

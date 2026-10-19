@@ -1,0 +1,10 @@
+Buddy: correct manager; 8/8 groups executed and passed; 31503-page baseline restored.
+Buddy: real exhaustion confirmed; seed 0x02410439, 32 x 128 steps.
+Buddy: 5 SLUB groups passed; actual exhaustion after 984 big objects.
+NOT COVERED: actual order-15 physical allocation. Descriptor-model boundaries passed.
+Best-Fit: correct manager; original 6/6; 5 SLUB groups passed; exhaustion after 1875 big objects.
+Default ELF: no Buddy state/test/manager/callback symbols.
+Best-Fit grade: 20/20, exit 0 in LF-normalized temporary source copy.
+Runtime wrappers: Buddy exit 124 after 60 seconds; Best-Fit exit 124 after 30 seconds; all success markers preceded timeout.
+No kernel panic, assertion failure or explicit FAIL in either runtime.
+Temporary grading source/build directories removed.

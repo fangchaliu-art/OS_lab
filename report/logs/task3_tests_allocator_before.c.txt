@@ -1,0 +1,332 @@
+#include <buddy_pmm.h>
+#include <list.h>
+#include <stdio.h>
+#include <string.h>
+
+// lab2 task3 2410439
+/* Index i describes pages[i], relative to DRAM_BASE, not the first free page.
+ * For an order-k block, i is a multiple of 2^k and its buddy is i ^ (1 << k).
+ * Only FREE_HEAD pages carry PageProperty; their property is the block length.
+ * ALLOC_HEAD.property stores the original request n; its actual order is in
+ * metadata. Every tail has property/order zero. No public Page changes needed.
+ */
+enum buddy_page_state {
+    BUDDY_UNMANAGED = 0,
+    BUDDY_FREE_HEAD,
+    BUDDY_FREE_TAIL,
+    BUDDY_ALLOC_HEAD,
+    BUDDY_ALLOC_TAIL,
+};
+
+struct buddy_page_meta {
+    uint8_t state;
+    uint8_t order;
+};
+
+struct buddy_state {
+    list_entry_t free_list[BUDDY_MAX_ORDER + 1];
+    size_t nr_free;
+    size_t nr_managed;
+    struct buddy_page_meta meta[BUDDY_MAX_PAGES];
+    /* Static scratch: a 32768-byte overlap map must not use the kernel stack. */
+    uint8_t seen[BUDDY_MAX_PAGES];
+};
+
+static struct buddy_state buddy;
+
+static size_t
+buddy_block_pages(unsigned int order) {
+    assert(order <= BUDDY_MAX_ORDER);
+    return (size_t)1 << order;
+}
+
+static size_t
+buddy_page_limit(void) {
+    assert(npage >= nbase && npage - nbase <= BUDDY_MAX_PAGES);
+    return npage - nbase;
+}
+
+/* Check numeric bounds before constructing/dereferencing a candidate buddy. */
+static bool
+buddy_in_range(size_t index, size_t length) {
+    size_t limit = buddy_page_limit();
+    return index < limit && length <= limit - index;
+}
+
+static size_t
+buddy_page_index(struct Page *page) {
+    uintptr_t address = (uintptr_t)page;
+    uintptr_t first = (uintptr_t)pages;
+    assert(pages != NULL && address >= first);
+    size_t offset = address - first;
+    assert(offset % sizeof(struct Page) == 0);
+    size_t index = offset / sizeof(struct Page);
+    assert(buddy_in_range(index, 1));
+    return index;
+}
+
+/* Reject out-of-capacity requests before rounding; shifts cannot overflow. */
+static bool
+buddy_request_order(size_t n, unsigned int *order) {
+    if (n == 0 || n > BUDDY_MAX_PAGES) {
+        return 0;
+    }
+    *order = 0;
+    while (buddy_block_pages(*order) < n) {
+        (*order)++;
+    }
+    return 1;
+}
+
+static void
+buddy_unlink_free(size_t index) {
+    struct Page *page = pages + index;
+    assert(buddy.meta[index].state == BUDDY_FREE_HEAD);
+    assert(PageProperty(page));
+    list_del_init(&page->page_link);
+    ClearPageProperty(page);
+    page->property = 0;
+    buddy.meta[index].state = BUDDY_FREE_TAIL;
+    buddy.meta[index].order = 0;
+}
+
+static void
+buddy_link_free(size_t index, unsigned int order) {
+    size_t length = buddy_block_pages(order);
+    assert(buddy_in_range(index, length) && (index & (length - 1)) == 0);
+    assert(buddy.meta[index].state == BUDDY_FREE_TAIL);
+    struct Page *page = pages + index;
+    buddy.meta[index].state = BUDDY_FREE_HEAD;
+    buddy.meta[index].order = order;
+    page->property = length;
+    SetPageProperty(page);
+    list_add(&buddy.free_list[order], &page->page_link);
+}
+
+/* All pages in the input block are FREE_TAIL; only registered, same-order
+ * free heads can participate. Adjacent non-buddies and holes cannot merge. */
+static void
+buddy_insert_free(size_t index, unsigned int order) {
+    while (order < BUDDY_MAX_ORDER) {
+        size_t length = buddy_block_pages(order);
+        size_t other = index ^ length;
+        if (!buddy_in_range(other, length) ||
+            buddy.meta[other].state != BUDDY_FREE_HEAD ||
+            buddy.meta[other].order != order) {
+            break;
+        }
+        buddy_unlink_free(other);
+        if (other < index) {
+            index = other;
+        }
+        order++;
+    }
+    buddy_link_free(index, order);
+}
+
+static void
+buddy_init(void) {
+    memset(&buddy, 0, sizeof(buddy));
+    for (unsigned int order = 0; order <= BUDDY_MAX_ORDER; order++) {
+        list_init(&buddy.free_list[order]);
+    }
+    /* This makes relative-index alignment also physical block alignment. */
+    assert((nbase & (BUDDY_MAX_PAGES - 1)) == 0);
+}
+
+static void
+buddy_init_memmap(struct Page *base, size_t n) {
+    assert(n > 0);
+    size_t index = buddy_page_index(base);
+    assert(buddy_in_range(index, n));
+    for (size_t i = index; i < index + n; i++) {
+        assert(PageReserved(pages + i));
+        assert(buddy.meta[i].state == BUDDY_UNMANAGED);
+        pages[i].flags = 0;
+        pages[i].property = 0;
+        set_page_ref(pages + i, 0);
+        buddy.meta[i].state = BUDDY_FREE_TAIL;
+        buddy.meta[i].order = 0;
+    }
+
+    size_t remaining = n;
+    while (remaining > 0) {
+        unsigned int order = 0;
+        while (order < BUDDY_MAX_ORDER) {
+            size_t larger = buddy_block_pages(order + 1);
+            if (larger > remaining || (index & (larger - 1)) != 0) {
+                break;
+            }
+            order++;
+        }
+        size_t length = buddy_block_pages(order);
+        buddy_insert_free(index, order);
+        index += length;
+        remaining -= length;
+    }
+    buddy.nr_free += n;
+    buddy.nr_managed += n;
+}
+
+static struct Page *
+buddy_alloc_pages(size_t n) {
+    unsigned int order;
+    if (!buddy_request_order(n, &order) ||
+        buddy_block_pages(order) > buddy.nr_free) {
+        return NULL;
+    }
+    unsigned int found = order;
+    while (found <= BUDDY_MAX_ORDER && list_empty(&buddy.free_list[found])) {
+        found++;
+    }
+    if (found > BUDDY_MAX_ORDER) {
+        return NULL;
+    }
+
+    struct Page *base = le2page(list_next(&buddy.free_list[found]), page_link);
+    size_t index = buddy_page_index(base);
+    assert(buddy.meta[index].order == found);
+    assert(buddy_in_range(index, buddy_block_pages(found)));
+    buddy_unlink_free(index);
+    while (found > order) {
+        found--;
+        buddy_link_free(index + buddy_block_pages(found), found);
+    }
+
+    size_t length = buddy_block_pages(order);
+    for (size_t i = index; i < index + length; i++) {
+        assert(buddy.meta[i].state == BUDDY_FREE_TAIL);
+        assert(!PageReserved(pages + i) && !PageProperty(pages + i));
+        buddy.meta[i].state = BUDDY_ALLOC_TAIL;
+        buddy.meta[i].order = 0;
+        pages[i].property = 0;
+        set_page_ref(pages + i, 0);
+    }
+    buddy.meta[index].state = BUDDY_ALLOC_HEAD;
+    buddy.meta[index].order = order;
+    base->property = n;
+    buddy.nr_free -= length;
+    return base;
+}
+
+static void
+buddy_free_pages(struct Page *base, size_t n) {
+    unsigned int order;
+    assert(buddy_request_order(n, &order));
+    size_t index = buddy_page_index(base);
+    assert(buddy.meta[index].state == BUDDY_ALLOC_HEAD);
+    assert(buddy.meta[index].order == order && base->property == n);
+    size_t length = buddy_block_pages(order);
+    assert(buddy_in_range(index, length) && (index & (length - 1)) == 0);
+    for (size_t i = index; i < index + length; i++) {
+        assert(buddy.meta[i].state ==
+               (i == index ? BUDDY_ALLOC_HEAD : BUDDY_ALLOC_TAIL));
+        assert(!PageReserved(pages + i) && !PageProperty(pages + i));
+        pages[i].flags = 0;
+        pages[i].property = 0;
+        set_page_ref(pages + i, 0);
+        buddy.meta[i].state = BUDDY_FREE_TAIL;
+        buddy.meta[i].order = 0;
+    }
+    buddy.nr_free += length;
+    buddy_insert_free(index, order);
+}
+
+static size_t
+buddy_nr_free_pages(void) {
+    return buddy.nr_free;
+}
+
+/* Phase-one invariants only: no allocation/free test scenarios here. */
+static void
+buddy_check(void) {
+    size_t limit = buddy_page_limit();
+    size_t free_total = 0, allocated_total = 0, managed_total = 0, blocks = 0;
+    memset(buddy.seen, 0, sizeof(buddy.seen));
+
+    for (unsigned int order = 0; order <= BUDDY_MAX_ORDER; order++) {
+        list_entry_t *head = &buddy.free_list[order];
+        list_entry_t *prev = head, *le = list_next(head);
+        size_t length = buddy_block_pages(order);
+        while (le != head) {
+            assert(++blocks <= limit);
+            struct Page *base = le2page(le, page_link);
+            size_t index = buddy_page_index(base);
+            assert(buddy_in_range(index, length));
+            assert((index & (length - 1)) == 0);
+            assert(le->prev == prev && prev->next == le);
+            assert(buddy.meta[index].state == BUDDY_FREE_HEAD);
+            assert(buddy.meta[index].order == order);
+            assert(PageProperty(base) && base->property == length);
+            for (size_t i = index; i < index + length; i++) {
+                assert(buddy.seen[i] == 0);
+                buddy.seen[i] = 1;
+                assert(!PageReserved(pages + i) && page_ref(pages + i) == 0);
+                if (i != index) {
+                    assert(buddy.meta[i].state == BUDDY_FREE_TAIL);
+                    assert(buddy.meta[i].order == 0);
+                    assert(!PageProperty(pages + i) && pages[i].property == 0);
+                }
+            }
+            if (order < BUDDY_MAX_ORDER) {
+                size_t other = index ^ length;
+                assert(!buddy_in_range(other, length) ||
+                       buddy.meta[other].state != BUDDY_FREE_HEAD ||
+                       buddy.meta[other].order != order);
+            }
+            free_total += length;
+            prev = le;
+            le = list_next(le);
+        }
+        assert(head->prev == prev && prev->next == head);
+    }
+
+    for (size_t index = 0; index < limit;) {
+        unsigned int state = buddy.meta[index].state;
+        if (state == BUDDY_UNMANAGED) {
+            assert(buddy.seen[index] == 0);
+            index++;
+        } else if (state == BUDDY_ALLOC_HEAD) {
+            unsigned int order = buddy.meta[index].order;
+            size_t length = buddy_block_pages(order);
+            assert(buddy_in_range(index, length));
+            assert((index & (length - 1)) == 0);
+            size_t requested = pages[index].property;
+            assert(requested > (length >> 1) && requested <= length);
+            for (size_t i = index; i < index + length; i++) {
+                assert(buddy.seen[i] == 0);
+                buddy.seen[i] = 2;
+                assert(!PageReserved(pages + i) && !PageProperty(pages + i));
+                if (i != index) {
+                    assert(buddy.meta[i].state == BUDDY_ALLOC_TAIL);
+                    assert(buddy.meta[i].order == 0 && pages[i].property == 0);
+                }
+            }
+            allocated_total += length;
+            managed_total += length;
+            index += length;
+        } else {
+            assert(state == BUDDY_FREE_HEAD || state == BUDDY_FREE_TAIL);
+            assert(buddy.seen[index] == 1);
+            managed_total++;
+            index++;
+        }
+    }
+    assert(free_total == buddy.nr_free);
+    assert(managed_total == buddy.nr_managed);
+    assert(free_total + allocated_total == managed_total);
+    cprintf("buddy: structural check passed, %lu free pages in %lu blocks, "
+            "%lu managed pages, max order %u (full behavior tests pending)\n",
+            (unsigned long)free_total, (unsigned long)blocks,
+            (unsigned long)managed_total, (unsigned int)BUDDY_MAX_ORDER);
+}
+
+const struct pmm_manager buddy_pmm_manager = {
+    .name = "buddy_pmm_manager",
+    .init = buddy_init,
+    .init_memmap = buddy_init_memmap,
+    .alloc_pages = buddy_alloc_pages,
+    .free_pages = buddy_free_pages,
+    .nr_free_pages = buddy_nr_free_pages,
+    .check = buddy_check,
+};

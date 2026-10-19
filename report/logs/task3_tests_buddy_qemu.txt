@@ -1,0 +1,113 @@
+
+OpenSBI v0.4 (Jul  2 2019 11:53:53)
+   ____                    _____ ____ _____
+  / __ \                  / ____|  _ \_   _|
+ | |  | |_ __   ___ _ __ | (___ | |_) || |
+ | |  | | '_ \ / _ \ '_ \ \___ \|  _ < | |
+ | |__| | |_) |  __/ | | |____) | |_) || |_
+  \____/| .__/ \___|_| |_|_____/|____/_____|
+        | |
+        |_|
+
+Platform Name          : QEMU Virt Machine
+Platform HART Features : RV64ACDFIMSU
+Platform Max HARTs     : 8
+Current Hart           : 0
+Firmware Base          : 0x80000000
+Firmware Size          : 112 KB
+Runtime SBI Version    : 0.1
+
+PMP0: 0x0000000080000000-0x000000008001ffff (A)
+PMP1: 0x0000000000000000-0xffffffffffffffff (A,R,W,X)
+DTB Init
+HartID: 0
+DTB Address: 0x82200000
+Physical Memory from DTB:
+  Base: 0x0000000080000000
+  Size: 0x0000000008000000 (128 MB)
+  End:  0x0000000087ffffff
+DTB init completed
+(THU.CST) os is loading ...
+Special kernel symbols:
+  entry  0xffffffffc02000d8 (virtual)
+  etext  0xffffffffc02071b0 (virtual)
+  edata  0xffffffffc020e020 (virtual)
+  end    0xffffffffc03b0940 (virtual)
+Kernel executable memory footprint: 1731KB
+memory management: buddy_pmm_manager
+physical memory detected: [0x0000000080000000, 0x0000000088000000)
+physical memory managed:  [0x0000000080000000, 0x0000000088000000), npage: 557056
+reserved: [0x0000000080000000, 0x00000000804f1000) (firmware+kernel+Page array)
+free:     [0x00000000804f1000, 0x0000000088000000), 31503 pages
+pages: 0xffffffffc03b1000 (physical 0x00000000803b1000), 32768 descriptors, kernel end 0x00000000803b0940
+buddy: structural check passed, 31503 free pages in 10 blocks, 31503 managed pages, max order 15
+[buddy_test] start, baseline free pages = 31503
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 31503 free pages in 10 blocks, 31503 managed pages, max order 15
+[buddy_test] case1 real boundaries 2^k +/- 1, k=6..14: PASS
+[buddy_test] case1 (basic, rounding and real size boundaries): PASS
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+[buddy_test] case2 (all split remainders and true exhaustion): PASS
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+[buddy_test] case3 (six-level merge in three release orders): PASS
+buddy: structural check passed, 4 free pages in 1 blocks, 4 managed pages, max order 15
+buddy: structural check passed, 4 free pages in 1 blocks, 4 managed pages, max order 15
+buddy: structural check passed, 4 free pages in 1 blocks, 4 managed pages, max order 15
+buddy: structural check passed, 2 free pages in 2 blocks, 2 managed pages, max order 15
+buddy: structural check passed, 2 free pages in 2 blocks, 2 managed pages, max order 15
+buddy: structural check passed, 2 free pages in 2 blocks, 2 managed pages, max order 15
+[buddy_test] case4 (non-buddies, occupied buddies and unregistered holes): PASS
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+[buddy_test] case5 (full requested-page data and interleaved reuse): PASS
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+[buddy_test] case6: genuine exhaustion at 64/64 pages (extra request returned NULL)
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+[buddy_test] case6 (invalid, overflow, exhausted and fragmented failures): PASS
+buddy: structural check passed, 29 free pages in 4 blocks, 29 managed pages, max order 15
+buddy: structural check passed, 29 free pages in 4 blocks, 29 managed pages, max order 15
+buddy: structural check passed, 29 free pages in 4 blocks, 29 managed pages, max order 15
+buddy: structural check passed, 1 free pages in 1 blocks, 1 managed pages, max order 15
+buddy: structural check passed, 1 free pages in 1 blocks, 1 managed pages, max order 15
+buddy: structural check passed, 1 free pages in 1 blocks, 1 managed pages, max order 15
+buddy: structural check passed, 29 free pages in 10 blocks, 29 managed pages, max order 15
+buddy: structural check passed, 29 free pages in 10 blocks, 29 managed pages, max order 15
+buddy: structural check passed, 29 free pages in 10 blocks, 29 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 32768 free pages in 1 blocks, 32768 managed pages, max order 15
+buddy: structural check passed, 32768 free pages in 1 blocks, 32768 managed pages, max order 15
+[buddy_test] case7: orders 0..15 descriptor-only boundaries: PASS
+buddy: structural check passed, 32768 free pages in 1 blocks, 32768 managed pages, max order 15
+[buddy_test] case7 (irregular/multiple regions and max-order descriptors): PASS
+[buddy_test] NOT COVERED: actual order-15 (32768-page) physical allocation; firmware/kernel reserve part of the 128 MiB RAM
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+[buddy_test] case8: seed=0x02410439, rounds=32, operations/round=128
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+buddy: structural check passed, 64 free pages in 1 blocks, 64 managed pages, max order 15
+[buddy_test] case8 (fixed-seed bitmap-oracle allocation/recovery): PASS
+buddy: structural check passed, 31503 free pages in 10 blocks, 31503 managed pages, max order 15
+[buddy_test] 8/8 required groups passed (coverage exclusions listed above); baseline restored to 31503
+buddy: structural check passed, 31503 free pages in 10 blocks, 31503 managed pages, max order 15
+check_alloc_page() succeeded!
+satp virtual address: 0xffffffffc020d000
+satp physical address: 0x000000008020d000
+slub: 20 size classes (16..1024), header 64 bytes, large-object threshold 1024, free-page baseline 31503
+[slub_test] start, baseline free pages = 31503
+[slub_test] case1 (basic & size boundaries): PASS
+[slub_test] case2 (object independence): PASS
+[slub_test] case3 (in-page reuse & cross-page): PASS
+[slub_test] case4 (reclaim): PASS
+[slub_test] case5: exhaustion reached after 984 big objects
+[slub_test] case5 (failure & recovery): PASS
+[slub_test] ALL CASES PASSED
+qemu-system-riscv64: terminating on signal 15 from pid 547 (timeout)

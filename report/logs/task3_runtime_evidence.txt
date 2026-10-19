@@ -1,0 +1,7 @@
+Buddy: correct manager, structural check, 5 SLUB cases, actual OOM, no panic/FAIL.
+Best-Fit: correct manager, original 6/6, 5 SLUB cases, actual OOM, no panic/FAIL.
+Best-Fit ELF: no Buddy state, manager, or callback symbols.
+Best-Fit grade: 20/20 in newline-normalized temporary source copy.
+Both runtime wrappers: exit 124 after all success output (expected infinite idle loop).
+Complete Buddy behavior tests: NOT GENERATED / NOT RUN.
+Temporary grading source and build directories removed after completion.
