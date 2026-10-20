@@ -330,7 +330,7 @@ buddy_check_structure(void) {
             (unsigned long)managed_total, (unsigned int)BUDDY_MAX_ORDER);
 }
 
-#ifdef PMM_USE_BUDDY
+#if defined(PMM_USE_BUDDY) && defined(ucore_test)
 static struct buddy_state buddy_test_state;
 static struct Page buddy_test_saved_pages[BUDDY_TEST_ARENA_PAGES];
 /* Descriptors only: these entries do not represent writable physical RAM. */
@@ -474,12 +474,12 @@ buddy_test_with_max_descriptors(buddy_test_body body) {
     assert(nr_free_pages() == baseline);
     return result;
 }
-#endif /* PMM_USE_BUDDY */
+#endif /* PMM_USE_BUDDY && ucore_test */
 
 static void
 buddy_check(void) {
     buddy_check_structure();
-#ifdef PMM_USE_BUDDY
+#if defined(PMM_USE_BUDDY) && defined(ucore_test)
     buddy_test();
     buddy_check_structure();
 #endif

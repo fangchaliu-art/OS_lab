@@ -3,7 +3,7 @@
 
 #include <pmm.h>
 
-#ifdef PMM_USE_BUDDY
+#if defined(PMM_USE_BUDDY) && defined(ucore_test)
 #define BUDDY_TEST_ARENA_PAGES 64
 
 struct buddy_test_region {
@@ -21,6 +21,6 @@ int buddy_test_with_regions(const struct buddy_test_region *regions, size_t coun
 int buddy_test_with_max_descriptors(buddy_test_body body);
 void buddy_test_check_structure(void);
 uint64_t buddy_test_state_digest(void);
-#endif /* PMM_USE_BUDDY */
+#endif /* PMM_USE_BUDDY && ucore_test */
 
 #endif /* !__KERN_MM_BUDDY_TEST_H__ */

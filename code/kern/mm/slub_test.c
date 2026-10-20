@@ -1,3 +1,4 @@
+#ifdef ucore_test
 #include <defs.h>
 #include <mmu.h>
 #include <pmm.h>
@@ -543,3 +544,4 @@ void slub_check(void) {
         cprintf("[slub_test] SOME CASES FAILED\n");
     }
 }
+#endif /* ucore_test */

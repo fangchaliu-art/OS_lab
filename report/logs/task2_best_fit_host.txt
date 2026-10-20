@@ -1,20 +1,17 @@
-Command (PowerShell, working directory D:\OS_CS\OS_lab):
-python code/tools/test_best_fit_host.py --cc E:/Apps/MinGW/bin/gcc.exe
-
-Captured combined stdout/stderr from the actual run (exit code 0):
-+ E:/Apps/MinGW/bin/gcc.exe --version
-gcc.exe (GCC) 13.2.0
+luoisa@LAPTOP-V2R77B3G:/mnt/d/OS_CS/OS_lab/code$ python3 tools/test_best_fit_host.py --cc gcc
++ gcc --version
+gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0
 Copyright (C) 2023 Free Software Foundation, Inc.
 This is free software; see the source for copying conditions.  There is NO
 warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
-+ E:/Apps/MinGW/bin/gcc.exe -std=gnu11 -O1 -g -Wall -Wextra -Wno-sign-compare -Ducore_test -I 'C:\Users\28405\AppData\Local\Temp\ucore-best-fit-host-zk56pqx5' -I 'D:\OS_CS\OS_lab\code\kern\mm' -idirafter 'D:\OS_CS\OS_lab\code\libs' 'C:\Users\28405\AppData\Local\Temp\ucore-best-fit-host-zk56pqx5\check.c' -o 'C:\Users\28405\AppData\Local\Temp\ucore-best-fit-host-zk56pqx5\check.exe'
-In file included from C:\Users\28405\AppData\Local\Temp\ucore-best-fit-host-zk56pqx5\check.c:4:
-D:\OS_CS\OS_lab\code\kern\mm/best_fit_pmm.c: In function 'best_fit_check':
-D:\OS_CS\OS_lab\code\kern\mm/best_fit_pmm.c:209:45: warning: variable 'p2' set but not used [-Wunused-but-set-variable]
++ gcc -std=gnu11 -O1 -g -Wall -Wextra -Wno-sign-compare -Ducore_test -I /tmp/ucore-best-fit-host-kzxctphb -I /mnt/d/OS_CS/OS_lab/code/kern/mm -idirafter /mnt/d/OS_CS/OS_lab/code/libs /tmp/ucore-best-fit-host-kzxctphb/check.c -o /tmp/ucore-best-fit-host-kzxctphb/check
+In file included from /tmp/ucore-best-fit-host-kzxctphb/check.c:4:
+/mnt/d/OS_CS/OS_lab/code/kern/mm/best_fit_pmm.c: In function ‘best_fit_check’:
+/mnt/d/OS_CS/OS_lab/code/kern/mm/best_fit_pmm.c:209:45: warning: variable ‘p2’ set but not used [-Wunused-but-set-variable]
   209 |     struct Page *p0 = alloc_pages(5), *p1, *p2;
       |                                             ^~
-+ 'C:\Users\28405\AppData\Local\Temp\ucore-best-fit-host-zk56pqx5\check.exe'
++ /tmp/ucore-best-fit-host-kzxctphb/check
 grading: 1 / 6 points
 grading: 2 / 6 points
 grading: 3 / 6 points
@@ -26,14 +23,8 @@ PASS: best fit, splitting, fragmented failure, failure immutability
 PASS: equal-size candidates choose the lower address
 PASS: partial frees, combined frees, predecessor/successor coalescing
 PASS: out-of-order adjacent and disjoint init_memmap regions
-PASS: bitmap oracle seed 1, 5000 operations, full recovery
-PASS: bitmap oracle seed 2410439, 5000 operations, full recovery
-PASS: bitmap oracle seed 324508639, 5000 operations, full recovery
-PASS: bitmap oracle seed 12648430, 5000 operations, full recovery
+PASS: bitmap oracle seed 1, 5000 iterations, full recovery
+PASS: bitmap oracle seed 2410439, 5000 iterations, full recovery
+PASS: bitmap oracle seed 324508639, 5000 iterations, full recovery
+PASS: bitmap oracle seed 12648430, 5000 iterations, full recovery
 ALL HOST ALGORITHM CHECKS PASSED (not a QEMU/kernel boot test)
-
-Record note: the output above was copied from the complete tool-returned
-stdout/stderr of this run, without rerunning. Subsequently the script's random
-test output label was changed from "5000 operations" to "5000 iterations" for
-precision: an iteration may skip a free when no allocated page exists. This
-wording-only change does not alter test assertions or allocator behavior.

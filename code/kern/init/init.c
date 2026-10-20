@@ -42,7 +42,9 @@ int kern_init(void) {
     pmm_init();  // init physical memory management
 
     slub_init();  // init slub object allocator (lab2 challenge)
-    slub_check();  // run slub behavior tests (lab2 challenge)
+#ifdef ucore_test
+    slub_check();  // run slub behavior tests (lab2 challenge, test build only)
+#endif
 
     /* do nothing */
     while (1)

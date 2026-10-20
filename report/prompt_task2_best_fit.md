@@ -70,9 +70,9 @@
 - `report/report.md`：填写 4.2.2 的设计、测试、问题处理和改进分析，更新第五部分对应验证项；Buddy 保持待执行。
 - `report/logs/task2_best_fit_*`：保存环境、构建、运行、评分、原测试完整性与宿主测试证据。没有修改原测试、First-Fit、SLUB、Makefile 或评分工具，没有提交或推送 Git。
 
-**实际环境：** WSL Ubuntu 24.04；`riscv64-unknown-elf-gcc (SiFive GCC 10.1.0-2020.08.2) 10.1.0`；QEMU 4.1.1；OpenSBI v0.4；GNU Make 4.3；QEMU 内存为 128 MiB。宿主补充测试使用 MinGW GCC 13.2.0。[完整环境输出](logs/task2_best_fit_environment.txt)。
+**实际环境：** WSL Ubuntu 24.04；`riscv64-unknown-elf-gcc (SiFive GCC 10.1.0-2020.08.2) 10.1.0`；QEMU 4.1.1；OpenSBI v0.4；GNU Make 4.3；QEMU 内存为 128 MiB。宿主补充测试使用 WSL Ubuntu 24.04 的 gcc 13.3.0。[完整环境输出](logs/task2_best_fit_environment.txt)。
 
-**实际执行命令：** 以下 Linux 命令通过 Windows 端的 `wsl -d Ubuntu --cd ... --exec ...` 执行，输出保存到对应日志。
+**实际执行命令：** 以下命令均在 WSL Ubuntu 24.04 中执行，输出保存到对应日志。
 
 ```bash
 cd /mnt/d/OS_CS/OS_lab/code
@@ -84,10 +84,11 @@ timeout --signal=TERM 30s make \
   QEMU=/opt/qemu-4.1.1/bin/qemu-system-riscv64 test
 ```
 
-Windows 宿主补充测试的实际命令为：
+宿主机补充测试的实际命令为（在 WSL Ubuntu 24.04 中，使用本机 gcc 13.3.0）：
 
-```powershell
-python code/tools/test_best_fit_host.py --cc E:/Apps/MinGW/bin/gcc.exe
+```bash
+cd /mnt/d/OS_CS/OS_lab/code
+python3 tools/test_best_fit_host.py --cc gcc
 ```
 
 首次在原源码目录调用的评分命令如下，因 CRLF 换行返回 2：

@@ -1,6 +1,6 @@
 #include <buddy_test.h>
 
-#ifdef PMM_USE_BUDDY
+#if defined(PMM_USE_BUDDY) && defined(ucore_test)
 #include <buddy_pmm.h>
 #include <stdio.h>
 #include <string.h>
@@ -711,4 +711,4 @@ buddy_test(void) {
     /* Prevent the caller's generic check_alloc_page success message on failure. */
     assert(passed == 8 && restored);
 }
-#endif /* PMM_USE_BUDDY */
+#endif /* PMM_USE_BUDDY && ucore_test */
