@@ -152,6 +152,10 @@ static void *slub_alloc_large(size_t size) {
         return NULL;
     }
     total_bytes = slub_header_size() + total;
+    /* ROUNDUP adds PGSIZE - 1 before rounding down; reject overflow. */
+    if (total_bytes > ~(size_t)0 - (PGSIZE - 1)) {
+        return NULL;
+    }
     npages = ROUNDUP(total_bytes, PGSIZE) / PGSIZE;
 
     page = alloc_pages(npages);
