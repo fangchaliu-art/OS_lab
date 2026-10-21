@@ -2016,47 +2016,270 @@ make clean && timeout --signal=TERM 60s make GCCPREFIX=$PREFIX QEMU=$QEMU_BIN DE
 
 ### 5.6 分支任务：GDB 调试页表查询过程
 
-**测试目标。** 观测一次真实取指（`entry.S` 末尾 `jr t0` 跳向 `kern_init`，虚拟地址 `0xffffffffc02000d8`）的地址翻译：调用路径、`satp.MODE` 分支、关键 PTE 与拼出的物理地址，以及模拟 TLB 的命中/未命中与 Bare 模式对照。
+**测试目标。** 用两个 GDB 观测一次真实取指（`jr t0` → `kern_init`，`0xffffffffc02000d8`）的完整地址翻译，并做 TLB 命中/未命中与 Bare 模式对照。
 
-**测试方法。** 按指导书自编译带 `debug_info` 的 QEMU 4.1.1（`--enable-debug`，`make debug` 以 `-s -S` 启动，`make gdb` 连接 1234）。采用三终端双 GDB：终端 2 以 `sudo gdb -p <PID>` 附加 QEMU 观察其 C 源码，终端 3 用 RISC-V GDB 经 gdbstub 控制客户机；先用 `hbreak` 装客户机断点，再装宿主断点——`get_physical_address` 处条件为 `addr == 0xffffffffc02000d8`，`cputlb.c:1030` 处条件为 `addr >> 12 == 0xffffffffc02000d8 >> 12`；另做 `satp=0` 的 Bare 模式对照。
+**测试环境。** WSL2 Ubuntu；自编译 QEMU 4.1.1（`~/qemu-4.1.1`，`--enable-debug`，未 `make install`）；ucore lab2。
 
-**步骤①：终端 1 —— 启动带调试信息、以 gdbstub 等待连接的 QEMU。**
+
+
+#### 5.6.1 准备
 
 ```bash
-cd /mnt/d/OS_CS/OS_lab/code
+cd "/mnt/d/1南开/课程/大三上学期/操作系统/lab/lab2/OS_lab/code"
+file ~/qemu-4.1.1/riscv64-softmmu/qemu-system-riscv64
+grep -n 'QEMU' Makefile | head -5
+make
+riscv64-unknown-elf-nm bin/kernel | grep -w kern_init
+make qemu
+```
+
+![图 5.6-01 调试版 QEMU 的 debug_info](images/fig-4.3-01-QEMU调试信息.png)
+
+*图 5.6-01　`file` 确认二进制带 `debug_info` 且未 strip。*
+
+![图 5.6-02 QEMU 版本与构建配置](images/fig-4.3-02-QEMU版本与构建配置.png)
+
+*图 5.6-02　QEMU 4.1.1 与 `--enable-debug` 配置。*
+
+![图 5.6-03 kern_init 的链接地址](images/fig-4.3-06-kern_init虚拟地址.png)
+
+*图 5.6-03　符号表给出 `kern_init = 0xffffffffc02000d8`。*
+
+![图 5.6-04 基线启动输出](images/fig-4.3-03-内核完整启动输出.png)
+
+*图 5.6-04　正常模式下的完整启动输出。*
+
+
+
+#### 5.6.2 三个停靠点
+
+终端 1：
+
+```bash
+cd "/mnt/d/1南开/课程/大三上学期/操作系统/lab/lab2/OS_lab/code"
 make debug
 ```
 
-**步骤②：终端 2 —— 附加 QEMU 宿主进程，观察其 C 源码。**
+终端 2：
 
 ```bash
+pgrep -af qemu-system-riscv64
 sudo gdb -p <QEMU_PID>
 ```
 
-**步骤③：终端 3 —— 客户机 RISC-V GDB，连接 gdbstub 并加载内核符号。**
+```gdb
+set pagination off
+set confirm off
+handle SIGPIPE nostop noprint
+handle SIGUSR1 nostop noprint pass
+handle SIGUSR2 nostop noprint pass
+continue
+```
+
+
+
+终端 3：
 
 ```bash
+cd "/mnt/d/1南开/课程/大三上学期/操作系统/lab/lab2/OS_lab/code"
 make gdb
 ```
 
-三终端启动后的断点设置、逐条观测与 Bare 对照过程已在 4.3.2–4.3.4 完整记录，关键截图见图 5.6-01、图 5.6-02。
+```gdb
+set confirm off
+hbreak *0x80200000
+continue
+info registers pc satp
+delete
+hbreak *0x80200034
+continue
+info registers pc satp
+delete
+hbreak *0xffffffffc02000d8
+continue
+info registers pc satp
+delete
+continue
+```
 
-**实测结果。**
-- 调用路径：`get_page_addr_code → tlb_fill → riscv_cpu_tlb_fill → get_physical_address`。
-- 寄存器：`pc`、`satp=0x8000000000080207`、`addr`、`access_type=2`（取指）、`mmu_idx=1`（S 模式）。
-- 页表翻译：`i=0`、`idx=0x1ff`、`pte_addr=0x80207ff8`、`pte=0x200000cf`、`ppn=0x80000`；第 0 级 1 GiB 大页得 `0x80200000`，加页内偏移 `0xd8`，结果 `0xffffffffc02000d8 → 0x802000d8`。
-- 模拟 TLB：首次 miss 落在 `cputlb.c:1030` 的 `tlb_hit` 后于 `:1031` 调 `tlb_fill`，再次命中直接落到 `:1039`。
-- Bare 对照：`satp=0` 时在 `:196` 的 MBARE 分支直接返回、不读页表；`satp=0x8000000000080207` 时进入 Sv39 遍历。
+![图 5.6-05 双 GDB 建立过程](images/fig-4.3-04-双GDB建立过程.png)
 
-![图 5.6-01 页表翻译条件断点命中](images/fig-4.3-07-条件断点命中瞬间.png)
+*图 5.6-05　终端 2 附加 QEMU 后的信号处理与放行。*
 
-图 5.6-01：条件断点 `get_physical_address` 命中于 `addr == 0xffffffffc02000d8` 的瞬间（复用 4.3 的调试截图）。
+![图 5.6-06 satp 写入前后](images/fig-4.3-05-satp写入前后对比.png)
 
-![图 5.6-02 物理地址计算结果](images/fig-4.3-11-物理地址计算.png)
+*图 5.6-06　分页前 `satp=0`，分页后 `satp=0x8000000000080207`。*
 
-图 5.6-02：由 `pte=0x200000cf`、`ppn=0x80000` 算得虚拟地址 `0xffffffffc02000d8` 翻译为物理地址 `0x802000d8`（复用 4.3 的调试截图）。
 
-**结论。** 已完成，达到观测目标（详见 4.3）。已知局限：观测覆盖一次取指与一次 TLB 命中/未命中，未逐条单步所有翻译路径；QEMU 的软件 TLB（C 代码查表与回填）在实现层面不同于真实 CPU 的片上 CAM。
+#### 5.6.3 抓取一次页表翻译
+
+先结束上一轮（终端 1 `Ctrl-A X`，终端 2、3 各按 Ctrl-C 后 `quit`），再在终端 1 重新 `make debug`。
+
+终端 2：
+
+```bash
+pgrep -af qemu-system-riscv64
+sudo gdb -p <QEMU_PID>
+```
+
+```gdb
+set pagination off
+set confirm off
+handle SIGPIPE nostop noprint
+handle SIGUSR1 nostop noprint pass
+handle SIGUSR2 nostop noprint pass
+break get_physical_address if addr == 0xffffffffc02000d8
+continue
+```
+
+终端 3：
+
+```bash
+cd "/mnt/d/1南开/课程/大三上学期/操作系统/lab/lab2/OS_lab/code"
+make gdb
+```
+
+```gdb
+continue
+```
+
+终端 2 命中后：
+
+```gdb
+bt
+print/x addr
+print/x env->satp
+print access_type
+print mmu_idx
+```
+
+![图 5.6-07 条件断点命中](images/fig-4.3-07-条件断点命中瞬间.png)
+
+*图 5.6-07　条件断点命中于 `addr == 0xffffffffc02000d8`。*
+
+![图 5.6-08 页表翻译入口](images/fig-4.3-08-页表翻译入口.png)
+
+*图 5.6-08　虚拟地址、`satp`、`access_type` 与 `mmu_idx`。*
+
+继续：
+
+```gdb
+delete
+break cpu_helper.c:242
+continue
+print/x base
+print i
+print ptshift
+print/x idx
+print/x base + idx * 8
+next
+print/x pte_addr
+```
+
+![图 5.6-09 页表遍历循环](images/fig-4.3-09-页表遍历循环.png)
+
+*图 5.6-09　第 0 级的 `base`、`i`、`ptshift`、`idx` 与 PTE 地址。*
+
+```gdb
+break cpu_helper.c:256
+continue
+print/x pte
+print/x ppn
+print pte & 0xf
+```
+
+![图 5.6-10 页表项 PTE](images/fig-4.3-10-页表项PTE.png)
+
+*图 5.6-10　PTE 内容与 PPN 字段。*
+
+```gdb
+break cpu_helper.c:334
+continue
+next
+print/x *physical
+print/x addr & 0xfff
+print/x (*physical) + (addr & 0xfff)
+```
+
+![图 5.6-11 物理地址计算](images/fig-4.3-11-物理地址计算.png)
+
+*图 5.6-11　页对齐物理地址、页内偏移与最终物理地址。*
+
+结束本轮：终端 1 `Ctrl-A X`；终端 2、3 各按 Ctrl-C 后 `quit`。
+
+#### 5.6.4 TLB miss / hit
+
+先结束上一轮，再重启 QEMU。终端 1 `make debug`；终端 2 附加后：
+
+```gdb
+set pagination off
+set confirm off
+handle SIGPIPE nostop noprint
+handle SIGUSR1 nostop noprint pass
+handle SIGUSR2 nostop noprint pass
+break cputlb.c:1030 if (addr >> 12) == (0xffffffffc02000d8 >> 12)
+continue
+```
+
+终端 3 `make gdb` 后 `continue`。第一次停在 `:1030`：
+
+```gdb
+print/x addr
+bt
+next
+```
+
+![图 5.6-12 TLB 未命中](images/fig-4.3-13-TLB未命中.png)
+
+*图 5.6-12　首次查询未命中，`next` 落到 `:1031`。*
+
+终端 2 `continue`，第二次停在 `:1030` 后：
+
+```gdb
+next
+```
+
+![图 5.6-13 TLB 命中](images/fig-4.3-14-TLB命中.png)
+
+*图 5.6-13　后续查询命中，`next` 直接落到 `:1039`。*
+
+结束本轮：终端 1 `Ctrl-A X`；终端 2、3 各按 Ctrl-C 后 `quit`。
+
+#### 5.6.5 Bare 模式对照
+
+先结束上一轮，再重启 QEMU。终端 1 `make debug`；终端 2 附加后：
+
+```gdb
+set pagination off
+set confirm off
+handle SIGPIPE nostop noprint
+handle SIGUSR1 nostop noprint pass
+handle SIGUSR2 nostop noprint pass
+break get_physical_address if addr == 0x80200000
+break cpu_helper.c:242 if addr == 0x80200000
+continue
+```
+
+终端 3 `make gdb` 后 `continue`。终端 2 命中后：
+
+```gdb
+print/x addr
+print/x env->satp
+print access_type
+print mmu_idx
+bt
+continue
+```
+
+等 1–2 秒后 Ctrl-C，执行 `info breakpoints`。本轮结束后同样用 `Ctrl-A X` 和 `quit` 收尾。
+
+![图 5.6-14 Bare 直通](images/fig-4.3-12-Bare直通对照.png)
+
+*图 5.6-14　`satp=0` 时走 MBARE 直通，不进入页表循环。*
+
+#### 5.6.6 小结
+
+**结论。** 所列用例全部通过。调用路径、页表遍历、PTE 与物理地址、TLB 命中/未命中、Bare 对照五项观测均在 QEMU 4.1.1 实机运行中实际命中并留有截图：`satp` 由 `0` 变为 `0x8000000000080207`（图 5.6-06），条件断点命中 `0xffffffffc02000d8`（图 5.6-07），页表遍历与 PTE 得到 `0x802000d8`（图 5.6-09 至 5.6-11），TLB 首次未命中、后续命中（图 5.6-12、5.6-13），Bare 模式直通且不进入页表循环（图 5.6-14），结果与 4.3 的记录一致。QEMU 软件 TLB 与真实 CPU TLB 的对比见 4.3.4.3。若条件断点不命中或终端 3 报 `invalid hex digit 116`，按 4.3.5 的现象三、四处理。
 
 ### 5.7 汇总
 
@@ -2068,7 +2291,7 @@ make gdb
 | SLUB（5.5）               | 五组均 PASS；Best-Fit 1875 个、Buddy 含测试镜像 984 个大对象后耗尽并恢复；第一阶段 Buddy 为 995 个                                                                                                                                                                                                                                                                                                                 | 已有 First-Fit 记录及本次两种配置回归均通过                        |
 | 内核编译与运行（5.1–5.5） | Buddy 宏构建与启动、清理后 Best-Fit `make test`，两者均出现 `check_alloc_page() succeeded!`                                                                                                                                                                                                                                                                                                                        | 两种配置完整构建与运行通过，默认保留 Best-Fit                      |
 | 框架评分（5.3）           | Best-Fit 配置 `make grade`，本轮回归仍为 `Total Score: 20/20`                                                                                                                                                                                                                                                                                                                                                      | 评分脚本换行规范为 LF 后直接通过；仅换行符差异；不是 Buddy 验收    |
-| 地址翻译调试（5.6）       | 双 GDB 三终端完成；断点：`get_physical_address`（条件 `addr == 0xffffffffc02000d8`）、`cputlb.c:1030`（条件 `addr >> 12 == 0xffffffffc02000d8 >> 12`）；调用路径：`get_page_addr_code → tlb_fill → riscv_cpu_tlb_fill → get_physical_address`；寄存器：`pc`、`satp=0x8000000000080207`、`addr`、`access_type=2`、`mmu_idx=1`；页表项：`pte=0x200000cf`、`ppn=0x80000`；转换结果：`0xffffffffc02000d8 → 0x802000d8` | 已完成，详见 4.3                                                   |
+| 地址翻译调试（5.6）       | 双 GDB 三终端完成；断点：`get_physical_address`（条件 `addr == 0xffffffffc02000d8`）、`cputlb.c:1030`（条件 `addr >> 12 == 0xffffffffc02000d8 >> 12`）；调用路径：`get_page_addr_code → tlb_fill → riscv_cpu_tlb_fill → get_physical_address`；寄存器：`pc`、`satp=0x8000000000080207`、`addr`、`access_type=2`、`mmu_idx=1`；页表项：`pte=0x200000cf`、`ppn=0x80000`；转换结果：`0xffffffffc02000d8 → 0x802000d8` | 已完成；5.6 给出可复现的演示步骤，详见 4.3                          |
 
 
 
@@ -2087,7 +2310,7 @@ make gdb
 | First-Fit 与 Best-Fit      | 连续内存分配与外部碎片   | 本实验按连续物理页分配；空闲总量足够不意味着存在足够大的连续块            |
 | Buddy System               | 分级分配、分裂与合并     | 二的幂块便于定位伙伴和合并，但请求向上取整可能产生内部浪费                |
 | SLUB 对象分配              | 内核动态内存管理         | 在页级分配之上服务小对象请求，需要管理对象大小、对齐和所在页              |
-| Sv39 页表与地址翻译        | 多级页表、地址映射与权限 | 物理页分配决定资源归属，页表记录映射；二者协作但不等价                    |
+| Sv39 页表与地址翻译        | 多级页表、地址映射与权限 | 内核链接在虚拟地址、加载在物理地址，二者由 `va_pa_offset` 关联；物理页分配决定资源归属，页表记录映射，二者协作但不等价 |
 | TLB 与 QEMU 调试           | 地址翻译缓存与硬件实现   | 可通过模拟器源码观察处理流程，但其软件结构不应直接当作真实 CPU 的内部结构 |
 
 ### 6.2 重要但未在本实验任务中完整展开的知识点
@@ -2096,6 +2319,8 @@ make gdb
 2. **进程地址空间与用户态隔离：** 初始内核映射不等于完整的多进程虚拟内存管理，用户地址空间创建、切换和保护需要后续机制支持。
 3. **进程调度与上下文切换：** 本实验的内存管理是其基础，但不以实现多进程调度为任务。
 4. **多核并发与一致性：** 完整系统中的分配器同步、跨核 TLB 一致性等问题，需要更复杂的运行场景与验证。
+5. **页表的动态建立与修改：** 本实验只观察内核启动时已建立的 1 GiB 超级页映射，没有实现 4 KiB 页映射、超级页拆分/合并、按需建立页表，以及修改映射后的 TLB 刷新策略。
+6. **碎片整理与内存压缩：** 本实验比较了 First-Fit、Best-Fit 与 Buddy 的碎片表现，但没有实现空闲页搬迁、压缩或碎片整理；长期分配/释放后的回收与整理需要更完整的机制。
 
 ### 6.3 实际收获与 AI 协作经验
 
