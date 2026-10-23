@@ -249,7 +249,7 @@ cprintf("reserved: [0x%016lx, 0x%016lx) (firmware+kernel+Page array)\n",
 - **Buddy System**：按 2 的幂阶（`2^k` 页）管理空闲块，释放时按伙伴关系（`i ^ (1<<k)`）逐级合并。
 - **SLUB**：在页分配器之上实现对象级分配，管理小对象与大小类别，并处理多页大对象。
 
-四个页分配器通过统一的 `struct pmm_manager` 回调接口接入内核——`init`、`init_memmap`、`alloc_pages`、`free_pages`、`nr_free_pages`、`check`；由 [pmm.c](../code/kern/mm/pmm.c) 的 `init_pmm_manager()` 依据编译宏选择当前生效的管理器（定义 `PMM_USE_BUDDY` 时用 Buddy，否则用 Best-Fit），因此上层 `alloc_page()`/`free_page()` 等接口与具体算法解耦。
+四个页分配器通过统一的 `struct pmm_manager` 回调接口接入内核——`init`、`init_memmap`、`alloc_pages`、`free_pages`、`nr_free_pages`、`check`；由 [pmm.c](../code/kern/mm/pmm.c) 的 `init_pmm_manager()` 依据编译宏选择当前生效的管理器（定义 `PMM_USE_BUDDY` 时用 Buddy，定义 `PMM_USE_FIRST_FIT` 时用 First-Fit，两者都未定义时用 Best-Fit），因此上层 `alloc_page()`/`free_page()` 等接口与具体算法解耦。
 
 它们共享同一套空闲区管理约定：
 
@@ -731,7 +731,7 @@ Best-Fit 仍可能留下难以利用的小空闲块，也不能合并被存活�
 
 本节记录编写 Buddy System 过程中为确认实现无误所做的**自测**，具体测试设计见[Buddy 设计文档](buddy_设计文档.md)；跨模块（SLUB、Best-Fit）的完整测试与回归见第五部分。Buddy 的验证分两阶段：接入后先做编译、启动选择与结构自检，第二份提示词完成后编写独立测试并运行八组用例。
 
-`init_pmm_manager()` 在定义 `PMM_USE_BUDDY` 时选择 `buddy_pmm_manager`，否则选择 `best_fit_pmm_manager`；每次切换都执行 `make clean`，防止旧对象文件掩盖配置变化。本机工具为 WSL Ubuntu、SiFive RISC-V GCC 10.1.0、QEMU 4.1.1、GNU Make 4.3；路径经实际版本命令核实后通过参数传入，没有写入工程构建配置。
+`init_pmm_manager()` 在定义 `PMM_USE_BUDDY` 时选择 `buddy_pmm_manager`，定义 `PMM_USE_FIRST_FIT` 时选择框架原有的 `default_pmm_manager`，两者都未定义时选择 `best_fit_pmm_manager`；每次切换都执行 `make clean`，防止旧对象文件掩盖配置变化。本机工具为 WSL Ubuntu、SiFive RISC-V GCC 10.1.0、QEMU 4.1.1、GNU Make 4.3；路径经实际版本命令核实后通过参数传入，没有写入工程构建配置。
 
 **第一阶段：编译、启动与结构自检**
 
@@ -1822,7 +1822,7 @@ AI 还解释了"第一次 Sv39 翻译为什么恰好是 `0xd8`"：`write_satp()`
 
 本节在代码完全完成之后统一组织测试。测试环境为：WSL2 Ubuntu、`riscv64-unknown-elf-gcc`（SiFive GCC 10.1.0）编译、`qemu-system-riscv64` 4.1.1、OpenSBI v0.4、128 MiB RAM（设备树 `Base 0x80000000`、`Size 0x8000000`、`End 0x87ffffff`）。
 
-**测试构建组织。** 自研测试（SLUB 行为测试 `slub_test()`、Buddy 八组行为测试 `buddy_test()` 及其测试专用状态与竞技场钩子）经框架既有的 `ucore_test` 编译开关与生产构建分离：普通 `make qemu` 下相关编译单元被预处理器整体剔除，测试代码零编入，启动仅保留框架 `basic_check`/`best_fit_check` 与 Buddy 结构自检（快速回归保障）；`make test`（`-D ucore_test`）下全部测试编译并运行。该分离沿用框架对 `best_fit_check` 扩展段的原有挂接机制，Makefile 无任何改动。后续实验可在无测试开销的生产内核上继续开发，需要回归时以 `make test` 一键运行全部测试（Buddy 配置加 `DEFS=-DPMM_USE_BUDDY`）。两点复现注意：其一，`make` 只按时间戳判断是否重编、不跟踪编译参数（`DEFS`、`-D ucore_test`）的变化，因此普通/测试构建之间及 Best-Fit/Buddy 配置之间切换必须先 `make clean`，本节以 `make test` 运行的命令块均已内嵌 `make clean`；其二，测试分离后普通构建内核不再含测试代码与测试静态数组，空闲页基线较测试构建多 51 页（Best-Fit 普通构建 31929 页、测试构建 31878 页），本节历史日志中的基线值均为测试构建或改造前构建的记录。
+**测试构建组织。** 自研测试（SLUB 行为测试 `slub_test()`、Buddy 八组行为测试 `buddy_test()` 及其测试专用状态与竞技场钩子）经框架既有的 `ucore_test` 编译开关与生产构建分离：普通 `make qemu` 下相关编译单元被预处理器整体剔除，测试代码零编入，启动仅保留框架 `basic_check`/`best_fit_check` 与 Buddy 结构自检（快速回归保障）；`make test`（`-D ucore_test`）下全部测试编译并运行。该分离沿用框架对 `best_fit_check` 扩展段的原有挂接机制，Makefile 无任何改动。后续实验可在无测试开销的生产内核上继续开发，需要回归时以 `make test` 一键运行全部测试（Buddy 配置加 `DEFS=-DPMM_USE_BUDDY`；First-Fit 配置加 `DEFS=-PMM_USE_FIRST_FIT`，此时 Buddy 测试因宏未定义而不参与编译）。两点复现注意：其一，`make` 只按时间戳判断是否重编、不跟踪编译参数（`DEFS`、`-D ucore_test`）的变化，因此普通/测试构建之间及 Best-Fit / First-Fit / Buddy 三配置之间切换必须先 `make clean`，本节以 `make test` 运行的命令块均已内嵌 `make clean`；其二，测试分离后普通构建内核不再含测试代码与测试静态数组，空闲页基线较测试构建多 51 页（Best-Fit 普通构建 31929 页、测试构建 31878 页），本节历史日志中的基线值均为测试构建或改造前构建的记录。
 
 **总体测试情况**：模块一通过；模块二任务一、任务二通过；Buddy 所列场景通过（阶 15 真实整块物理分配未覆盖）；SLUB 三配置回归通过；地址翻译调试已完成。
 

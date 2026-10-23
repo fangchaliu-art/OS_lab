@@ -4,6 +4,7 @@
 /code/.qemu.out
 /code/cscope*
 /code/tags
+/code_copy/
 .vscode/
 .DS_Store
 Thumbs.db

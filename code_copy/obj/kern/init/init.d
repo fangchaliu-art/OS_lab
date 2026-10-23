@@ -1,5 +1,0 @@
-obj/kern/init/init.o obj/kern/init/init.d: kern/init/init.c \
- kern/driver/console.h libs/defs.h kern/mm/pmm.h kern/debug/assert.h \
- kern/mm/memlayout.h libs/list.h kern/mm/mmu.h libs/riscv.h \
- kern/mm/slub.h kern/mm/slub_test.h libs/stdio.h libs/stdarg.h \
- libs/string.h kern/driver/dtb.h
