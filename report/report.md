@@ -1219,7 +1219,7 @@ continue
 
 先装客户机断点、后装宿主断点，原因是终端 3 每次插入或删除断点，QEMU 内部都会依次调用 `gdb_breakpoint_insert` → `cpu_breakpoint_insert` → `breakpoint_invalidate` → `cpu_get_phys_page_attrs_debug` → `get_physical_address`；终端 3 读写客户机内存则走 `cpu_memory_rw_debug`，最终也进入同一个函数。如果终端 2 的宿主断点已经启用，QEMU 会在处理终端 3 请求的过程中被 ptrace 停住，回复报文发不出去，终端 3 超时后就会出现 RSP 报文错位。
 
-放行后的观测顺序如下（终端 3；若终端 2 此时装有断点，必须先 `delete` + `continue`）：
+放行后的观测顺序如下：
 
 1. `continue` 停在 `0x80200000`，`info registers pc satp` 确认 `pc=0x80200000`、`satp=0x0`；
 2. `delete` 删掉两个断点，只重设 `hbreak *0x80200034`，`continue` 停在 `csrw satp` 之前，再次确认 `satp=0x0`；
@@ -1479,6 +1479,28 @@ continue
 ![图 4.3-12 Bare 直通对照](images/fig-4.3-12-Bare直通对照.png)
 
 *图 4.3-12　Bare 阶段 `satp=0`、`addr=0x80200000`，随后不再命中循环内的断点。*
+
+确认完上表后，在终端 2 执行 `continue` 让客户机继续跑；等 1–2 秒后 Ctrl-C，执行 `info breakpoints`，输出如下：
+
+```text
+(gdb) info breakpoints
+Num     Type           Disp Enb Address            What
+1       breakpoint     keep y   0x0000564dbe22899d in get_physical_address
+                                                   at /home/myt/qemu-4.1.1/target/riscv/cpu_helper.c:158
+        stop only if addr == 0x80200000
+        breakpoint already hit 1 time
+2       breakpoint     keep y   0x0000564dbe228e59 in get_physical_address
+                                                   at /home/myt/qemu-4.1.1/target/riscv/cpu_helper.c:242
+        stop only if addr == 0x80200000
+(gdb)
+```
+
+断点 1 在函数入口 `:158`，命中 1 次；断点 2 在 Sv39 遍历循环内部 `:242`，下面没有 `breakpoint already hit` 一行，说明它一次也没有命中。这与前面的结论一致：`satp.MODE=0` 时走 `:196` 的 MBARE 分支，直接执行 `*physical = addr` 返回，根本不会进入 `:237` 的循环。
+
+![图 4.3-12b Bare 断点命中统计](images/fig-4.3-12b-Bare断点命中统计.png)
+
+*图 4.3-12b　`info breakpoints`：入口断点 `:158` 命中 1 次，循环内断点 `:242` 从未命中。*
+
 
 ##### 4.3.4.2 TLB hit/miss 观测
 
@@ -2281,11 +2303,32 @@ bt
 continue
 ```
 
-等 1–2 秒后 Ctrl-C，执行 `info breakpoints`。本轮结束后同样用 `Ctrl-A X` 和 `quit` 收尾。
-
 ![图 5.6-14 Bare 直通](images/fig-4.3-12-Bare直通对照.png)
 
 *图 5.6-14　`satp=0` 时走 MBARE 直通，不进入页表循环。*
+
+等 1–2 秒后 Ctrl-C，执行 `info breakpoints`，输出如下：
+
+```text
+(gdb) info breakpoints
+Num     Type           Disp Enb Address            What
+1       breakpoint     keep y   0x0000564dbe22899d in get_physical_address
+                                                   at /home/myt/qemu-4.1.1/target/riscv/cpu_helper.c:158
+        stop only if addr == 0x80200000
+        breakpoint already hit 1 time
+2       breakpoint     keep y   0x0000564dbe228e59 in get_physical_address
+                                                   at /home/myt/qemu-4.1.1/target/riscv/cpu_helper.c:242
+        stop only if addr == 0x80200000
+(gdb)
+```
+
+断点 1 在函数入口 `:158`，命中 1 次；断点 2 在 Sv39 遍历循环内部 `:242`，没有 `breakpoint already hit` 一行，说明它一次也没有命中。可见 `satp.MODE=0` 时 `get_physical_address` 虽然被调用，但在 `:196` 的 MBARE 分支就直接返回，没有进入 `:237` 的 Sv39 循环。
+
+![图 5.6-15 Bare 断点命中统计](images/fig-4.3-12b-Bare断点命中统计.png)
+
+*图 5.6-15　`info breakpoints`：入口断点 `:158` 命中 1 次，循环内断点 `:242` 从未命中。*
+
+本轮结束后同样用 `Ctrl-A X` 和 `quit` 收尾。
 
 #### 5.6.6 小结
 
