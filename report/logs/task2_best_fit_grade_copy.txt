@@ -1,3 +1,0 @@
-Grade staging verification: allocator and pmm.c are byte-identical to working sources.
-Only the staged tools/grade.sh line endings were normalized.
-Normalized grade.sh SHA256: 9f4b6a6277daa092b70706a67a656dc3978acb0eb8139352a3a7b21ec9f522b1

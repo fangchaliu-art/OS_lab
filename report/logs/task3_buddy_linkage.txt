@@ -1,6 +1,0 @@
--mcmodel=medany -std=gnu99 -Wno-unused -Werror -fno-builtin -Wall -O2 -nostdinc -DPMM_USE_BUDDY -fno-stack-protector -ffunction-sections -fdata-sections -g -Ilibs/
-
-ffffffffc0209018 0000000000018110 b buddy
-ffffffffc0200b1a 0000000000000680 t buddy_check
-ffffffffc02040a8 0000000000000038 R buddy_pmm_manager
-
