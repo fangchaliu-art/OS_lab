@@ -6,10 +6,14 @@
 #include <memlayout.h>
 #include <mmu.h>
 #include <riscv.h>
+#include <sbi.h>
 #include <stdio.h>
 #include <trap.h>
 
 #define TICK_NUM 100
+// 每输出 SHUTDOWN_AFTER 次时钟统计信息（即 SHUTDOWN_AFTER * TICK_NUM 次时钟
+// 中断）后关机。框架未定义该宏，这里取 3，即 ticks 达到 300 时关机。
+#define SHUTDOWN_AFTER 3
 
 static void print_ticks() {
     cprintf("%d ticks\n", TICK_NUM);
@@ -80,7 +84,81 @@ void print_regs(struct pushregs *gpr) {
     cprintf("  t6       0x%08x\n", gpr->t6);
 }
 
-//lab3 function2 YOUR CODE
+//lab3 function2 2410826
+
+/* interrupt_handler - 处理中断，即 scause 最高位为 1 的 Trap。
+ *
+ * 收到 S 模式时钟中断时，先重设下一次时钟事件，再累加 ticks；每累计
+ * TICK_NUM 次时钟中断输出一次统计信息，累计输出次数达到
+ * SHUTDOWN_AFTER 后关闭机器。
+ *
+ * 其他中断只按类型输出提示；无法识别的原因输出原因码并打印 trapframe，
+ * 便于调试。
+ */
+void interrupt_handler(struct trapframe *tf) {
+    // 去掉 scause 的最高位，得到中断原因码
+    uintptr_t cause = tf->cause & ~((uintptr_t)1 << 63);
+    // print_ticks() 的累计调用次数（只统计时钟中断）
+    static int print_count = 0;
+
+    switch (cause) {
+    case IRQ_S_TIMER:
+        // 重新设置下一次时钟事件；否则系统只会收到一次时钟中断，
+        // 之后不会再有新的时钟中断到来
+        clock_set_next_event();
+        ticks++;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+            if (++print_count >= SHUTDOWN_AFTER) {
+                sbi_shutdown();
+            }
+        }
+        break;
+    case IRQ_U_SOFT:
+        cprintf("User software interrupt\n");
+        break;
+    case IRQ_S_SOFT:
+        cprintf("Supervisor software interrupt\n");
+        break;
+    case IRQ_H_SOFT:
+        cprintf("Hypervisor software interrupt\n");
+        break;
+    case IRQ_M_SOFT:
+        cprintf("Machine software interrupt\n");
+        break;
+    case IRQ_U_TIMER:
+        cprintf("User timer interrupt\n");
+        break;
+    case IRQ_H_TIMER:
+        cprintf("Hypervisor timer interrupt\n");
+        break;
+    case IRQ_M_TIMER:
+        cprintf("Machine timer interrupt\n");
+        break;
+    case IRQ_U_EXT:
+        cprintf("User external interrupt\n");
+        break;
+    case IRQ_S_EXT:
+        cprintf("Supervisor external interrupt\n");
+        break;
+    case IRQ_H_EXT:
+        cprintf("Hypervisor external interrupt\n");
+        break;
+    case IRQ_M_EXT:
+        cprintf("Machine external interrupt\n");
+        break;
+    case IRQ_COP:
+        cprintf("Coprocessor interrupt\n");
+        break;
+    case IRQ_HOST:
+        cprintf("Host interrupt\n");
+        break;
+    default:
+        cprintf("Unknown interrupt: cause %d\n", (int)cause);
+        print_trapframe(tf);
+        break;
+    }
+}
 
 
 static inline void trap_dispatch(struct trapframe *tf) {
