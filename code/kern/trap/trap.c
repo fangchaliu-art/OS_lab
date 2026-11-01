@@ -160,6 +160,32 @@ void interrupt_handler(struct trapframe *tf) {
     }
 }
 
+//lab3 function3 2410439
+
+/* exception_handler - 处理异常，即 scause 最高位为 0 的 Trap。
+ *
+ * 对非法指令异常和断点异常，打印异常信息并按指令长度更新 tf->epc，
+ * 使 sret 返回后跳过触发指令继续执行；其他异常打印完整 trapframe 便于调试。
+ *
+ * 指令长度由指令低两位决定：低两位为 11 时为 4 字节指令，否则为 2 字节
+ * 压缩指令。本实验运行在内核态，tf->epc 指向内核代码段，可安全解引用。
+ */
+void exception_handler(struct trapframe *tf) {
+    switch (tf->cause) {
+    case CAUSE_ILLEGAL_INSTRUCTION:
+        cprintf("Illegal instruction at 0x%08x\n", tf->epc);
+        tf->epc += ((*(uint32_t *)tf->epc & 0x3) == 0x3) ? 4 : 2;
+        break;
+    case CAUSE_BREAKPOINT:
+        cprintf("Breakpoint at 0x%08x\n", tf->epc);
+        tf->epc += ((*(uint32_t *)tf->epc & 0x3) == 0x3) ? 4 : 2;
+        break;
+    default:
+        print_trapframe(tf);
+        break;
+    }
+}
+
 
 static inline void trap_dispatch(struct trapframe *tf) {
     if ((intptr_t)tf->cause < 0) {
