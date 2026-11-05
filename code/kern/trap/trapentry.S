@@ -1,9 +1,9 @@
 #include <riscv.h>
 
     .macro SAVE_ALL
-
+    #把当前 sp 的值写入 sscratch，暂时记住原来的栈指针 S
     csrw sscratch, sp
-
+    #把 sp 向低地址移动，给这次中断预留栈空间
     addi sp, sp, -36 * REGBYTES
     # save x registers
     STORE x0, 0*REGBYTES(sp)
@@ -41,13 +41,16 @@
     # get sr, epc, badvaddr, cause
     # Set sscratch register to 0, so that if a recursive exception
     # occurs, the exception vector knows it came from the kernel
-    csrrw s0, sscratch, x0
+    # 把 sscratch 里面的旧值 S 读到 s0
+    csrrw s0, sscratch, x0， 把 x0 的值 0 写入 sscratch
+    # 接着保存硬件记录的 Trap 信息
     csrr s1, sstatus
     csrr s2, sepc
     # csrr s3, sbadaddr
     csrr s3, stval
     csrr s4, scause
 
+    # STORE 把 S 写进槽位 2
     STORE s0, 2*REGBYTES(sp)
     STORE s1, 32*REGBYTES(sp)
     STORE s2, 33*REGBYTES(sp)

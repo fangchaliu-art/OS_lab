@@ -1002,8 +1002,6 @@ Total Score: 100/100
 | 调用与返回     | `jal trap` 返回后顺序进入 `__trapret`，恢复完成后执行已有 `sret`                |
 | 栈对齐         | Trap frame 为 288 字节，是 16 的整数倍，保持原有 ABI 栈对齐                     |
 
-以上为源码检查结果，不等同于实际运行中的寄存器恢复测试通过。
-
 ### 5.2 框架代码兼容问题及修改
 
 首次单独编译时，错误出现在原框架 `SAVE_ALL` 中：
@@ -1027,7 +1025,7 @@ kern/trap/trapentry.S:47: Error: unknown CSR `sbadaddr'
 csrr s3, stval
 ```
 
-后续仍将读取结果保存到第 34 个槽位，`struct trapframe` 的布局及其他保存逻辑保持不变。这是对原框架的名称兼容性修正，是本次对“保留 SAVE_ALL”约束所作的必要调整。
+后续仍将读取结果保存到第 34 个槽位，`struct trapframe` 的布局及其他保存逻辑保持不变。
 
 ### 5.3 单文件编译与反汇编检查
 
@@ -1050,15 +1048,8 @@ make -B \
 
 命令退出码为 `0`，没有汇编错误，说明修改后的练习一代码已通过单文件编译。
 
-### 5.4 当前验证范围
 
-已完成练习一的源码审查、临时兼容映射下的目标文件反汇编检查，以及正式修正源文件后的单文件编译。
-
-当前 `trap.c` 中的 `exception_handler()` 尚未实现，完整构建仍受这个接口缺失影响。因此，本次没有启动 QEMU，也没有将寄存器恢复、异常返回或评分测试记录为运行通过。
-
-待相关模块补齐后，使用 QEMU 4.1.1 验证实际 Trap 进入与返回、寄存器和栈指针恢复，以及处理函数更新 `epc` 后的继续执行行为，再补充运行截图。
-
-### 5.5 功能模块二：中断与时钟处理的源码检查
+### 5.4 功能模块二：中断与时钟处理的源码检查
 
 
 检查对象为按定稿提示词实际生成并合入 `kern/trap/trap.c` 的 `interrupt_handler()`（`trap.c:98-161`），重点核对原因码解析、时钟事件重设、计数与输出、关机阈值和模块边界。
@@ -1079,7 +1070,7 @@ make -B \
 
 以上为源码级检查结果，其中“原因码解析”“链接属性”两项另有目标文件证据：`nm obj/kern/trap/trap.o` 显示 `T interrupt_handler`，`strings` 也能找到 `Supervisor software interrupt`、`Unknown interrupt: cause %d`、`%d ticks`。
 
-### 5.6 功能模块二：异常处理的源码检查
+### 5.5 功能模块二：异常处理的源码检查
 
 检查对象为按定稿提示词实际生成并合入 `kern/trap/trap.c` 的 `exception_handler()`（`trap.c:173-187`），重点核对异常原因码分类、epc 按指令长度更新、输出文案和模块边界。
 
@@ -1100,7 +1091,7 @@ make -B \
 
 以上为源码级检查结果。链接属性另有目标文件证据：`nm obj/kern/trap/trap.o` 显示 `T exception_handler`，`strings` 能找到 `Illegal instruction at`、`Breakpoint at`。
 
-### 5.7 完整运行验证
+### 5.6 完整运行验证
 
 `exception_handler()` 合入后，全工程编译阻塞解除，三个模块（A 的 Trap 入口恢复、B 的中断时钟、C 的异常处理）协同运行。以下为在 QEMU 4.1.1 上的实际运行结果。
 
