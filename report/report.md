@@ -694,10 +694,6 @@ void interrupt_handler(struct trapframe *tf) {
 
 这两段输出说明了两件事：其一，其余所有目标文件都编译通过，全工程只缺 `exception_handler` 一个符号；其二，`trap.c` 能正常编出目标文件，最终卡在链接期，与 (1) 的编译期隐式声明是两个不同阶段的阻塞，不能混为一谈。
 
-**(3) `make qemu` / `make grade`：未运行**
-
-两者都需要链接完整内核，在 `exception_handler()` 合入前构建失败，构建产物已用 `make clean` 清理。
-
 
 ### 4.4 功能模块二：异常处理与集成验证
 
