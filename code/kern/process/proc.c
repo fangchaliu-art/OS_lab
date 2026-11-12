@@ -380,4 +380,43 @@ void proc_init(void)
     assert(initproc != NULL && initproc->pid == 1);
 }
 
-//LAB4 function3 YOUR CODE
+//LAB4 function3 2410826
+
+// cpu_idle - the idle process's main loop. It keeps checking whether the
+//             current thread needs to be rescheduled and yields the CPU by
+//             calling schedule() when it does.
+void cpu_idle(void)
+{
+    while (1)
+    {
+        if (current->need_resched)
+        {
+            schedule();
+        }
+    }
+}
+
+// proc_run - make proc run on the CPU
+void proc_run(struct proc_struct *proc)
+{
+    if (proc != current)
+    {
+        bool intr_flag;
+        struct proc_struct *prev = current, *next = proc;
+
+        local_intr_save(intr_flag);
+        {
+            // current must be updated before switch_to, because a brand-new
+            // thread starts from forkret and reads current->tf.
+            current = proc;
+
+            // proc->pgdir already holds the physical base address of the
+            // page table, so it must not be wrapped by PADDR() again.
+            write_csr(satp, 0x8000000000000000 | (next->pgdir >> RISCV_PGSHIFT));
+            flush_tlb();
+
+            switch_to(&(prev->context), &(next->context));
+        }
+        local_intr_restore(intr_flag);
+    }
+}
