@@ -4,20 +4,20 @@
 
 | 项目         | 内容                                           |
 | ------------ | ---------------------------------------------- |
-| **实验名称** | Lab4：进程管理 |
+| **实验名称** | Lab4：进程管理                                 |
 | **小组成员** | 2412084-刘芳希；2410826-马伊汀；2410439-吴佳璐 |
-| **完成日期** | 2026-11-                                     |
+| **完成日期** | 2026-11-                                       |
 
 
 
 
 ### 小组分工
 
-| 成员           | 负责的练习/模块                                                                                  | 报告分工                                                                                                 |
-| -------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
+| 成员                | 负责的练习/模块                                                                                                                                       | 报告分工                                                                                                                          |
+| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | 2412084-刘芳希（A） | 使用实验二、三的提示词重新生成并适配基础代码；完成模块一：虚拟内存页操作（`page_insert`、`page_remove`）；完成 Challenge 2：分页模式与 `get_pte` 分析 | 负责报告前半部分（实验基本信息、小组分工、第一至三部分），以及本人模块和 Challenge 2 的功能说明、spec、prompt、实现迭代与问题分析 |
-| 2410439-吴佳璐（B） | 完成模块二：进程创建与初始化（`alloc_proc`、`proc_init`、`kernel_thread`、`do_fork`、`copy_thread`、`copy_mm`） | 负责本人模块的功能说明、spec、prompt、实现迭代与问题分析 |
-| 2410826-马伊汀（C） | 完成模块三：进程调度与上下文切换（`cpu_idle`、`schedule`、`proc_run`、`switch_to`）；完成 Challenge 1：中断保存与恢复分析；负责最终联调与测试 | 负责本人模块和 Challenge 1 的功能说明、spec、prompt、实现迭代与问题分析，以及第五部分测试与验证、第六部分实验总结与收获 |
+| 2410439-吴佳璐（B） | 完成模块二：进程创建与初始化（`alloc_proc`、`proc_init`、`kernel_thread`、`do_fork`、`copy_thread`、`copy_mm`）                                       | 负责本人模块的功能说明、spec、prompt、实现迭代与问题分析                                                                          |
+| 2410826-马伊汀（C） | 完成模块三：进程调度与上下文切换（`cpu_idle`、`schedule`、`proc_run`、`switch_to`）；完成 Challenge 1：中断保存与恢复分析；负责最终联调与测试         | 负责本人模块和 Challenge 1 的功能说明、spec、prompt、实现迭代与问题分析，以及第五部分测试与验证、第六部分实验总结与收获           |
 
 
 ---
@@ -339,10 +339,10 @@ void page_remove(pde_t *pgdir, uintptr_t la);
 Sv32、Sv39 和 Sv48 都采用多级页表，将虚拟页号拆成多个索引，逐级定位页表项。对于普通的 4 KiB 页面，三者的页内偏移均为 12 位，主要区别如下：
 
 | 分页模式 | 适用架构 | 虚拟地址划分（从高位索引到页内偏移） | 页表级数 | 每个页表项大小 | 每页页表项数量 |
-| --- | --- | --- | --- | --- | --- |
-| Sv32 | RV32 | 10 + 10 + 12 位 | 2 级 | 4 字节 | 1024 |
-| Sv39 | RV64 | 9 + 9 + 9 + 12 位 | 3 级 | 8 字节 | 512 |
-| Sv48 | RV64 | 9 + 9 + 9 + 9 + 12 位 | 4 级 | 8 字节 | 512 |
+| -------- | -------- | ------------------------------------ | -------- | -------------- | -------------- |
+| Sv32     | RV32     | 10 + 10 + 12 位                      | 2 级     | 4 字节         | 1024           |
+| Sv39     | RV64     | 9 + 9 + 9 + 12 位                    | 3 级     | 8 字节         | 512            |
+| Sv48     | RV64     | 9 + 9 + 9 + 9 + 12 位                | 4 级     | 8 字节         | 512            |
 
 Sv39 和 Sv48 的虚拟地址仍由 64 位寄存器保存，上表只列参与地址划分的低 39 位或低 48 位，其余高位必须分别等于第 38 位或第 47 位。这些模式也支持在较高层级使用叶子项映射大页，因此并非所有映射都必须走到最底层。
 
@@ -369,6 +369,342 @@ Sv39 和 Sv48 的虚拟地址仍由 64 位寄存器保存，上表只列参与�
 如果需要改进，可以对外提供只读查找接口 `lookup_pte()` 和允许创建的接口 `ensure_pte()`，内部仍共用同一个页表遍历辅助函数，避免复制两套逻辑。创建接口还应明确分配失败时是保留已建的空页表，还是回收本次新分配的页表页；并发环境下也需要统一考虑页表修改的同步保护。这些问题不会仅靠拆分函数自动解决。
 
 因此，本实验保留 `get_pte(pgdir, la, create)`，明确参数语义并正确处理 `NULL` 即可；若后续需要支持更多分页模式、大页或并发地址空间管理，再根据维护需求拆分接口并完善遍历与失败处理。
+
+---
+
+### 功能模块二：进程创建与初始化
+
+**负责人：** 2410439-吴佳璐
+
+#### 模块功能描述
+
+**需要实现/修改的函数：**
+
+涉及文件为 `kern/process/proc.c`，在 `//LAB4 function2 YOUR CODE` 对应位置实现以下函数：
+
+```c
+static struct proc_struct *alloc_proc(void);
+static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
+static void copy_thread(struct proc_struct *proc, uintptr_t esp,
+                        struct trapframe *tf);
+int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf);
+int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags);
+void proc_init(void);
+```
+
+**功能说明：**
+
+本模块在物理内存管理和虚拟内存管理之上，建立内核线程的管理结构。进程控制块、内核栈、PID、父子关系、首次执行现场和可运行状态在此组织中完成，使线程从“被创建”成为调度模块可以直接选择的实体。
+
+`alloc_proc()` 使用 `kmalloc()` 申请进程控制块，并把 `state` 置为 `PROC_UNINIT`、`pid` 置为 `-1`，其余运行期字段清零，`context` 整体清零，`pgdir` 设置为启动页表的物理基址 `boot_pgdir_pa`。此时控制块尚未分配 PID 和内核栈，也不进入任何链表，因此不会被调度器看到。
+
+`proc_init()` 负责建立进程管理的初始环境。它先初始化 `proc_list` 与全部 `hash_list` 桶，然后把当前启动执行现场组织为 `idleproc`：PID 为 0、状态为 `PROC_RUNNABLE`、内核栈为 `bootstack`、`need_resched` 置 1、名字为 `"idle"`，并把它设为 `current`、计入 `nr_process`。随后通过 `kernel_thread(init_main, "Hello world!!", 0)` 创建 init 线程，经 `find_proc()` 取回控制块后命名为 `"init"`。`idleproc` 不挂入进程链表，只作为当前执行现场和调度器无可用线程时的回退。
+
+`kernel_thread()` 构造一个临时陷阱帧作为新线程的首次执行现场：`gpr.s0` 保存线程函数 `fn`，`gpr.s1` 保存参数 `arg`，`epc` 指向 `kernel_thread_entry`，`status` 在保留当前 `sstatus` 的基础上置位 `SPP`、`SPIE` 并清除 `SIE`，保证 `sret` 返回 S 模式并重新开启中断。随后以 `clone_flags | CLONE_VM` 调用 `do_fork()`，由后者完成实际创建。
+
+`do_fork()` 依次检查进程数上限、申请控制块、设置父进程、分配内核栈、调用 `copy_mm()` 和 `copy_thread()`。在中断保护下完成 PID 分配、散列桶插入、进程链表插入和 `nr_process` 递增，退出临界区后调用 `wakeup_proc()` 使新线程进入 `PROC_RUNNABLE`，最后返回 PID。任一中间步骤失败都按相反顺序回收已分配资源，不留下半初始化线程。
+
+`copy_thread()` 把调用者提供的陷阱帧复制到新线程内核栈顶部，设置 `gpr.a0 = 0` 表示子线程的返回值，并根据 `esp` 是否为 0 选择内核栈顶或调用者提供的栈指针；同时设置 `context.ra = forkret`、`context.sp = proc->tf`，使新线程第一次被切换时从 `forkret → forkrets → __trapret` 路径恢复陷阱帧并跳到线程入口。
+
+`copy_mm()` 在本阶段不进行真正的地址空间复制。当前没有用户进程，`current->mm` 为 `NULL`，该函数断言这一前提后直接返回 0，仅作为后续实验地址空间复制的接口保留。
+
+**主要要求（spec）：**
+
+- `alloc_proc()` 只负责申请和初始化控制块，失败返回 `NULL` 且不产生其他副作用；不得在其中分配 PID、内核栈、插入链表或唤醒线程。
+- `alloc_proc()` 必须清零 `context`，使 `idleproc` 的 `context.ra` 保持 0；`pgdir` 保存物理基址 `boot_pgdir_pa`，与后续 `proc_run()` 直接调用 `lsatp(proc->pgdir)` 的约定一致。
+- `proc_init()` 必须先初始化 `proc_list` 和所有散列桶，再创建线程；`idleproc` 分配失败或 init 线程创建失败时必须 `panic`，不得继续使用未初始化的控制块。
+- `idleproc` 的 PID、状态、内核栈、`need_resched`、名字和 `current` 必须满足现有模块测试的断言；`initproc` 的 PID 为 1、父进程为 `idleproc`，并且已经进入 `PROC_RUNNABLE`。
+- `kernel_thread()` 必须附加 `CLONE_VM`；`sstatus` 的设置需保证 `sret` 返回 S 模式并重新开启中断；陷阱帧是栈上临时对象，其内容由 `copy_thread()` 复制，不能长期保存其地址。
+- `do_fork()` 中 PID 分配、`hash_proc()`、`list_add()` 和 `nr_process++` 必须位于同一个中断保护临界区内，`wakeup_proc()` 放在临界区之后；失败路径按“内核栈 → 控制块”逆序释放，不残留链表节点或 PID 占用。
+- `do_fork()` 只创建并唤醒线程，不调用 `schedule()`、不切换 `current`；线程真正运行由功能模块三负责。
+- `copy_thread()` 的陷阱帧使用 `(struct trapframe *)(proc->kstack + KSTACKSIZE) - 1` 定位；只设置 `context.ra` 与 `context.sp`，其余上下文寄存器保持清零状态。
+- 复用现有的 `get_pid()`、`hash_proc()`、`setup_kstack()`、`put_kstack()`、`forkret`、`forkrets`、`wakeup_proc()`、`kmalloc()`、`kfree()` 等接口，不修改 `proc.h`、`sched.h` 及其他模块代码。
+
+本模块与前置模块的衔接体现在资源来源上：控制块由 `kmalloc()` 分配，内核栈由 `setup_kstack()` 通过 `alloc_pages()` 分配，映射与页表操作由功能模块一保证；而 `do_fork()` 唤醒的新线程能否真正运行，取决于功能模块三的 `schedule()`、`proc_run()` 与 `switch_to`。因此本模块目前只进行目标文件编译和静态断言核对，运行阶段验证在联调时完成。
+
+#### 实现迭代过程
+
+##### 第一次迭代：`pgdir` 字段保存虚拟地址还是物理地址
+
+**遇到的问题：**
+
+初版模块描述没有明确 `alloc_proc()` 中 `pgdir` 应保存页表的内核虚拟地址还是物理地址。按 x86 版本 ucore 的写法，容易直接填入 `boot_pgdir_va`。
+
+**原因分析：**
+
+本实验运行在 RISC-V 上，模块三的 `proc_run()` 通过现有的 `lsatp()` 设置 `satp`。`lsatp()` 直接执行 `pgdir >> RISCV_PGSHIFT` 后写入 `satp`，不会替调用者做地址转换，而 `satp` 要求保存页表物理基址。`boot_pgdir_va` 位于 `KERNBASE` 之上，直接写入会得到非法的页表基址；工程中另设的 `boot_pgdir_pa` 才是 `satp` 需要的值。
+
+**问题解决策略：**
+
+在提示词的 `[RELY]` 和 `alloc_proc()` 的 spec 中明确 `pgdir = boot_pgdir_pa`，并补充跨模块约定：`proc_run()` 直接调用 `lsatp(proc->pgdir)`，不能再套 `PADDR()`；两个模块必须统一使用同一种地址形态。
+
+**最终结果：**
+
+实现中 `alloc_proc()` 写入 `boot_pgdir_pa`，该约定写入最终提示词，联调时由模块三按同一约定实现 `proc_run()`。
+
+##### 第二次迭代：idleproc 是否挂入进程链表
+
+**遇到的问题：**
+
+若按“所有进程都要登记”的直觉，把 `idleproc` 也插入 `proc_list` 和 `hash_list`，调度器遍历可运行线程时可能选中它。
+
+**原因分析：**
+
+`idleproc` 的 `context` 保持全零，`context.ra == 0`；一旦被 `switch_to` 选中，保存现场后会跳转到地址 0，破坏系统执行。现有测试也明确要求 `idleproc->context.ra == 0`，说明它不应作为普通可切换线程。此外若把它插入链表，`get_pid()` 的扫描结果也会受到无关节点影响。
+
+**问题解决策略：**
+
+在 `proc_init()` 的 spec 中规定：`idleproc` 只设置字段、递增 `nr_process` 并赋给 `current`，不挂入任何链表；`schedule()` 在没有其他可运行线程时显式回退到 `idleproc`。同时固定初始化顺序为先建立空链表、再创建线程，避免 `hash_proc()` 与 `get_pid()` 访问未初始化的链表。
+
+**最终结果：**
+
+实现中 `idleproc` 不进入链表，init 线程由 `do_fork()` 正常登记，PID 分配结果为 1；静态核对与 `test_lab4_process_create()` 的断言一致。
+
+##### 第三次迭代：失败路径回收与临界区顺序
+
+**遇到的问题：**
+
+初版描述只给出 `do_fork()` 的正常流程，没有说明资源分配失败时如何回滚，也没有说明 `wakeup_proc()` 是否应放在中断保护区内。
+
+**原因分析：**
+
+`do_fork()` 同时涉及控制块、内核栈、PID、散列桶和进程链表，任一环节失败都可能留下内存泄漏或半初始化线程；`wakeup_proc()` 会把线程置为可运行，如果放在临界区内，调度器可能在链表和计数尚未稳定时看到新线程。
+
+**问题解决策略：**
+
+补齐失败分支：`nr_process` 超限返回 `-E_NO_FREE_PROC`；控制块分配失败返回 `-E_NO_MEM`；内核栈或 `copy_mm()` 失败时按“内核栈 → 控制块”逆序释放，并且不插入任何链表。把 PID 分配、`hash_proc()`、`list_add()` 与 `nr_process++` 放入同一个 `local_intr_save/restore` 临界区，`wakeup_proc()` 放在临界区之后。
+
+**最终结果：**
+
+实现按上述顺序完成，失败路径不会留下已登记节点。在项目的 `code` 目录执行 `make -B obj/kern/process/proc.o`，输出 `+ cc kern/process/proc.c`，无编译错误与警告，生成 `obj/kern/process/proc.o`。由于模块三尚未实现，完整内核无法链接，运行阶段验证留待联调。
+
+#### 最终提示词
+
+以下是本模块最终使用的提示词：
+
+````markdown
+## [PROMPT]
+
+**任务**：在当前 Lab4 项目中修改 `code/kern/process/proc.c`（相对于代码目录为 `kern/process/proc.c`），实现 `alloc_proc()`、`proc_init()`、`kernel_thread()`、`do_fork()`、`copy_thread()`、`copy_mm()`，完成进程控制块的初始化、idle 线程与 init 线程的建立，以及内核线程的创建，使新建线程具备内核栈、PID、首次执行现场和可运行状态。
+
+**操作要求**：必须修改项目中的实际文件，不能只输出代码片段。先阅读现有实现和声明，只在 `//LAB4 function2 YOUR CODE` 对应区域补充上述函数及必要的内部辅助函数，并保留该标记，将其中的 `YOUR CODE` 替换为学号 `2410439`。不修改其他函数和模块：`do_exit()`、`init_main()`、`forkret()`、`setup_kstack()`、`put_kstack()`、`get_pid()`、`hash_proc()`、`find_proc()` 已由框架提供；`//LAB4 function3 YOUR CODE`、`kern/schedule/sched.c`、`kern/process/switch.S`、`kern/mm/pmm.c` 属于其他模块，不得改动。若编译时缺少 `SSTATUS_*` 或 `read_csr()` 的声明，可在文件头部按现有风格补充 `#include <riscv.h>`，不改动其他逻辑。
+
+**输出要求**：以工程真实代码和下面三个部分为准完成修改，简要说明修改内容及验证结果。当前项目功能模块三尚未实现，完整内核无法链接和运行，因此只做本模块目标文件的编译检查，不补写 `schedule()`、`proc_run()`、`cpu_idle()`、`switch_to()`，也不声称线程创建测试已经在运行阶段通过。
+
+## [RELY]
+
+代码运行于 RV64/Sv39 环境，相关声明和类型位于 `kern/process/proc.h`、`kern/trap/trap.h`、`kern/mm/memlayout.h`、`kern/mm/pmm.h`、`kern/schedule/sched.h`、`kern/sync/sync.h`、`kern/mm/kmalloc.h`、`libs/error.h`、`libs/riscv.h` 等现有头文件。使用前以实际代码核对，不重新定义这些接口。
+
+**类型与状态：**
+
+- `struct proc_struct` 为进程控制块，字段包括 `state`、`pid`、`runs`、`kstack`、`need_resched`、`parent`、`mm`、`context`、`tf`、`pgdir`、`flags`、`name`、`list_link`、`hash_link`。
+- `struct context` 保存上下文切换所需的 `ra`、`sp` 和 `s0`～`s11`，其中只有 `ra`、`sp` 需要在本模块设置，其余字段保持 `alloc_proc()` 中的清零状态。
+- `struct trapframe` 由 36 个寄存器宽度组成，布局与 `trapentry.S` 的 `SAVE_ALL`／`RESTORE_ALL` 一致；本模块使用 `gpr.s0`、`gpr.s1`、`gpr.a0`、`gpr.sp`、`status`、`epc`。
+- `KSTACKPAGE` 为内核栈页数（2 页），`KSTACKSIZE` 为内核栈字节大小；`bootstack` 为启动栈的起始地址，也是 `idleproc` 的内核栈。
+- `proc_list` 为进程链表，`hash_list[HASH_LIST_SIZE]` 为按 PID 散列的进程桶；`nr_process`、`current`、`idleproc`、`initproc` 为本文件内的现有全局变量。
+- `boot_pgdir_va` 为启动页表的内核虚拟地址，`boot_pgdir_pa` 为其物理地址；后续 `proc_run()` 会直接以 `proc->pgdir` 写入 `satp`，因此 `pgdir` 字段应保存物理基址 `boot_pgdir_pa`。
+- `E_NO_MEM`、`E_NO_FREE_PROC` 由 `error.h` 提供，`MAX_PROCESS` 为进程数上限。
+
+**可用接口：**
+
+```c
+static int get_pid(void);                       /* 分配唯一 PID */
+static void hash_proc(struct proc_struct *proc);/* 插入 PID 散列桶 */
+struct proc_struct *find_proc(int pid);         /* 按 PID 查找 */
+static int setup_kstack(struct proc_struct *proc);   /* 分配 KSTACKPAGE 页内核栈 */
+static void put_kstack(struct proc_struct *proc);    /* 释放内核栈 */
+static void forkret(void);                      /* 新线程首次执行的 C 入口，内部调用 forkrets(current->tf) */
+void kernel_thread_entry(void);                 /* entry.S：move a0, s1; jalr s0; jal do_exit */
+void forkrets(struct trapframe *tf);            /* trapentry.S：恢复陷阱帧并 sret */
+void wakeup_proc(struct proc_struct *proc);     /* 将线程置为 PROC_RUNNABLE */
+char *set_proc_name(struct proc_struct *proc, const char *name);
+void *kmalloc(size_t n);
+void kfree(void *objp);
+```
+
+- `alloc_proc()` 使用 `kmalloc(sizeof(struct proc_struct))` 申请控制块，`kmalloc_init()` 已在 `pmm_init()` 中调用；`do_fork()` 失败时用 `kfree()` 回收控制块。
+- `setup_kstack()` 成功返回 0 并设置 `proc->kstack`，失败返回 `-E_NO_MEM`；`put_kstack()` 与它配对。
+- `wakeup_proc()` 内部断言线程不是 `PROC_ZOMBIE` 或 `PROC_RUNNABLE`，因此只能对新建的 `PROC_UNINIT` 线程调用。
+- `forkret()`、`kernel_thread_entry` 与 `forkrets` 共同完成新线程首次运行：`switch_to` 返回 `forkret` 后，经 `forkrets(current->tf)` 进入 `__trapret`，再按 `tf->epc` 跳到线程入口。
+- `read_csr(sstatus)` 与 `SSTATUS_SPP`、`SSTATUS_SPIE`、`SSTATUS_SIE` 由 `libs/riscv.h` 提供；`local_intr_save(x)`、`local_intr_restore(x)` 由 `kern/sync/sync.h` 提供，`x` 记录进入临界区前中断是否开启。
+- `schedule()`、`proc_run()`、`cpu_idle()`、`switch_to` 属于功能模块三，本模块不实现、不调用。
+
+## [GUARANTEE]
+
+必须实现以下公开接口，签名与 `proc.h` 一致：
+
+```c
+void proc_init(void);
+int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags);
+int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf);
+```
+
+同时实现本文件内部使用的辅助函数：
+
+```c
+static struct proc_struct *alloc_proc(void);
+static void copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf);
+static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
+```
+
+不增加新的公开接口，不修改 `proc.h`、`sched.h` 及其他头文件。
+
+## [SPECIFICATION]
+
+### alloc_proc
+
+**Pre-Condition：**
+
+- `kmalloc_init()` 已完成，内核堆可分配对象；`boot_pgdir_pa` 已由 `pmm_init()` 设置。
+- 调用者还没有为进程分配 PID、内核栈，也没有把它挂入任何链表。
+
+**Post-Condition：**
+
+- 成功返回一个已清零并完成字段初始化的 `struct proc_struct`；失败返回 `NULL`，不产生其他副作用。
+- 新控制块不进入 `proc_list` 和 `hash_list`，不改变 `nr_process`，不改变 `current`。
+
+**Case 1：`kmalloc()` 返回 `NULL`。** 直接返回 `NULL`，不访问空指针。
+
+**Case 2：分配成功。** 依次初始化：`state = PROC_UNINIT`、`pid = -1`、`runs = 0`、`kstack = 0`、`need_resched = 0`、`parent = NULL`、`mm = NULL`、`tf = NULL`、`pgdir = boot_pgdir_pa`、`flags = 0`；`context` 整体清零（包括 `ra`、`sp`），`name` 整体清零。
+
+**Requirements：**
+
+- 不得在 `alloc_proc()` 中分配内核栈、分配 PID、插入链表或调用 `wakeup_proc()`。
+- `context.ra` 必须保持 0；首次执行现场由 `copy_thread()` 设置，`idleproc` 不会经由 `switch_to` 进入。
+- `mm` 保持 `NULL`；本实验当前阶段没有用户地址空间。
+
+### proc_init
+
+**Pre-Condition：**
+
+- `pmm_init()`、`vmm_init()` 已完成，`kmalloc` 可用；`current`、`idleproc`、`initproc` 初值为 `NULL`。
+- `proc_list` 与 `hash_list` 尚未初始化，需要在本函数中建立空链表。
+
+**Post-Condition：**
+
+- `proc_list` 与 `hash_list` 的每个桶均为空链表。
+- `idleproc` 存在：`pid == 0`、`state == PROC_RUNNABLE`、`kstack == (uintptr_t)bootstack`、`need_resched == 1`、`name == "idle"`、`parent == NULL`、`mm == NULL`、`tf == NULL`、`runs == 0`、`flags == 0`、`context.ra == 0`。
+- `current == idleproc`，`nr_process` 已包含 idle 线程。
+- `initproc` 存在且已登记：`pid == 1`、`state == PROC_RUNNABLE`、`parent == idleproc`、`mm == NULL`、`context.ra != 0`、`context.sp != 0`、`name == "init"`。
+
+**Case 1：`alloc_proc()` 为 idleproc 失败。** 调用 `panic("cannot alloc idleproc.\n")`。
+
+**Case 2：创建 init 线程失败（`kernel_thread()` 返回值 `<= 0`）。** 调用 `panic("create init_main failed.\n")`，不继续使用未初始化的 `initproc`。
+
+**Case 3：正常路径。** 先用 `list_init()` 初始化 `proc_list`，并对 `hash_list` 的每个桶调用 `list_init()`；然后为 idleproc 设置上述字段、`nr_process++`、`current = idleproc`；再调用 `kernel_thread(init_main, "Hello world!!", 0)` 创建 init 线程，通过 `find_proc(pid)` 取回控制块并 `set_proc_name(initproc, "init")`。
+
+**Requirements：**
+
+- idleproc 只作为当前执行现场和无可用线程时的调度回退，不挂入 `proc_list` 和 `hash_list`；`initproc` 由 `do_fork()` 负责登记。
+- 初始化顺序必须先建立空链表，再创建线程，否则 `hash_proc()`、`get_pid()` 会访问未初始化的链表。
+- `init_main` 已由框架实现，本模块不修改其内容。
+
+### kernel_thread
+
+**Pre-Condition：**
+
+- 在进程管理初始化之后的内核上下文调用，`fn` 为内核函数地址，`arg` 为传给它的参数；`clone_flags` 为调用者给出的克隆标志。
+- 调用者不要求本函数分配内核栈或 PID。
+
+**Post-Condition：**
+
+- 成功返回新建线程的 PID（大于 0），该线程尚未运行，已处于 `PROC_RUNNABLE`，其首次执行现场为：进入 `kernel_thread_entry`，由 `s0` 调用 `fn`、由 `s1` 传入 `arg`。
+- 失败返回 `do_fork()` 给出的负错误码，不残留线程控制块、内核栈或链表节点。
+
+**Case 1：正常创建。** 在栈上定义并清零 `struct trapframe tf`，设置 `tf.gpr.s0 = (uintptr_t)fn`、`tf.gpr.s1 = (uintptr_t)arg`、`tf.epc = (uintptr_t)kernel_thread_entry`、`tf.status = (read_csr(sstatus) | SSTATUS_SPP | SSTATUS_SPIE) & ~SSTATUS_SIE`，然后返回 `do_fork(clone_flags | CLONE_VM, 0, &tf)`。
+
+**Case 2：`do_fork()` 失败。** 直接把负错误码返回给调用者，不做额外的资源回收。
+
+**Requirements：**
+
+- 必须附加 `CLONE_VM`，表示新建的是共享内核地址空间的线程。
+- `status` 的设置必须保证 `sret` 返回 S 模式并重新开启中断：置位 `SPP`、`SPIE`，清除 `SIE`。
+- 陷阱帧是栈上临时对象，只在调用期间有效；其内容由 `do_fork()` 中的 `copy_thread()` 复制到新线程内核栈，不能把它的地址长期保存在新控制块中。
+
+### do_fork
+
+**Pre-Condition：**
+
+- `current` 指向当前线程，`tf` 指向调用者准备好的陷阱帧；`proc_list`、`hash_list`、`get_pid()`、`hash_proc()` 已可用。
+- `clone_flags` 可能包含 `CLONE_VM`，`stack` 在 `kernel_thread` 路径为 0。
+
+**Post-Condition：**
+
+- 成功返回新线程 PID；新线程的 `parent == current`，已分配内核栈、PID，完成 `copy_mm()` 与 `copy_thread()`，已插入 `proc_list` 和 `hash_list`，`nr_process` 增加 1，状态为 `PROC_RUNNABLE`。
+- 失败返回负错误码，且不残留控制块、内核栈、PID 占用或链表节点。
+
+**Case 1：`nr_process >= MAX_PROCESS`。** 返回 `-E_NO_FREE_PROC`，不分配任何资源。
+
+**Case 2：`alloc_proc()` 返回 `NULL`。** 返回 `-E_NO_MEM`。
+
+**Case 3：`setup_kstack()` 失败。** 释放刚分配的控制块（`kfree`），返回 `-E_NO_MEM`。
+
+**Case 4：`copy_mm()` 失败。** 释放内核栈（`put_kstack`）和控制块（`kfree`），返回 `-E_NO_MEM`。
+
+**Case 5：正常路径。** 先设置 `proc->parent = current`；按序完成内核栈分配、`copy_mm()`、`copy_thread()`；随后在 `local_intr_save(intr_flag)` 保护的临界区内完成 `proc->pid = get_pid()`、`hash_proc(proc)`、`list_add(&proc_list, &(proc->list_link))`、`nr_process++`；退出临界区后调用 `wakeup_proc(proc)`，返回 `proc->pid`。
+
+**Requirements：**
+
+- PID 分配、散列插入、链表插入和进程计数必须放在同一个中断保护临界区内，避免 PID 冲突或链表被中断处理破坏；`local_intr_restore(intr_flag)` 按进入前的状态恢复中断。
+- `wakeup_proc()` 必须在临界区之后调用，且只能对 `PROC_UNINIT` 状态调用。
+- 失败路径按“内核栈 → 控制块”的逆序释放，不能把尚未登记成功的线程留在 `proc_list`、`hash_list` 中，也不能调用 `put_kstack()` 处理尚未分配的内核栈。
+- 本函数只负责创建和唤醒线程，不调用 `schedule()`，不切换 `current`；线程真正运行由功能模块三负责。
+
+### copy_thread
+
+**Pre-Condition：**
+
+- `proc` 已由 `alloc_proc()` 初始化并已分配内核栈；`tf` 指向调用者的陷阱帧模板；`esp` 为调用者指定的用户栈指针，`kernel_thread` 路径为 0。
+
+**Post-Condition：**
+
+- `proc->tf` 指向新线程内核栈顶部的陷阱帧，内容为 `*tf` 的副本；`proc->tf->gpr.sp` 为新线程首次运行时的栈指针；`proc->tf->gpr.a0 == 0`；`proc->context.ra == (uintptr_t)forkret`；`proc->context.sp == (uintptr_t)proc->tf`。
+- 新线程第一次被调度时，从 `forkret` 进入，经 `forkrets(proc->tf)` 恢复陷阱帧，按 `tf->epc` 执行线程入口；`kernel_thread` 创建的线程因此进入 `kernel_thread_entry`，由 `s0`、`s1` 调用目标函数。
+
+**Case 1：`esp == 0`（`kernel_thread` 路径）。** 令 `proc->tf->gpr.sp = (uintptr_t)proc->tf`，新线程使用内核栈顶部作为栈指针。
+
+**Case 2：`esp != 0`（为后续用户态 fork 预留）。** 令 `proc->tf->gpr.sp = esp`，不覆盖调用者提供的栈指针。
+
+**Requirements：**
+
+- 陷阱帧位置使用 `(struct trapframe *)(proc->kstack + KSTACKSIZE) - 1` 计算，不得越出内核栈，也不得覆盖内核栈中其他数据。
+- `a0` 置 0 用于表达子线程的返回值；`fn` 与 `arg` 仍通过 `s0`、`s1` 传递，不能改为写入 `a0`。
+- 只设置 `context.ra` 与 `context.sp`；`context` 的其他寄存器保持 `alloc_proc()` 清零后的值。
+- 不修改调用者传入的 `tf` 模板本身。
+
+### copy_mm
+
+**Pre-Condition：**
+
+- 本实验当前阶段没有用户进程，`current->mm == NULL`；`clone_flags` 可能包含 `CLONE_VM`。
+
+**Post-Condition：**
+
+- 返回 0；`proc->mm` 保持 `NULL`；不复制、不新建 `mm_struct`，不修改页表。
+- 调用者（`do_fork()`）据此继续创建线程；本函数不会因内存不足失败。
+
+**Case 1：所有调用。** 断言当前线程没有用户地址空间（`assert(current->mm == NULL)`），直接返回 0。
+
+**Requirements：**
+
+- 保留该接口作为后续实验地址空间复制的挂接点，但本阶段不实现真正的内存复制。
+- 不调用 `mm_create()`、`mm_destroy()`，不改动 `proc->pgdir`。
+- 不因为 `CLONE_VM` 去共享或替换页表；线程共享内核页表由 `alloc_proc()` 设置的 `pgdir` 体现。
+
+### 验证要求
+
+先做静态自检：`alloc_proc()` 的初始字段、`proc_init()` 中 idleproc 与 initproc 的状态、PID、父子关系和上下文，必须与现有模块测试 `test_lab4_process_create()` 的断言一致，尤其注意 `idleproc->pid == 0`、`idleproc->kstack == (uintptr_t)bootstack`、`idleproc->tf == NULL`、`idleproc->runs == 0`、`idleproc->flags == 0`、`idleproc->context.ra == 0`、`initproc->pid == 1`、`initproc->parent == idleproc`、`initproc->context.ra != 0`、`initproc->context.sp != 0`。
+
+编译检查在项目的 `code` 目录执行：
+
+```bash
+make -B obj/kern/process/proc.o
+```
+
+该命令只编译本模块目标文件，不链接完整内核，因此不依赖尚未实现的功能模块三。要求命令正常结束并生成 `obj/kern/process/proc.o`，无编译错误；若出现警告，需结合内容判断并记录。
+
+由于 `schedule()`、`proc_run()`、`cpu_idle()`、`switch_to` 尚未实现，完整内核链接和 `make grade` 运行会失败，这属于功能模块三的工作，不应通过补写其他模块或修改测试来绕过。运行阶段验证留待联调时执行，本模块报告只说明编译检查结果和静态核对结论，不声称线程创建测试已经运行通过。
+````
 
 ---
 
@@ -406,6 +742,35 @@ make -B obj/kern/mm/pmm.o
 ![A 部分前置代码与功能模块一编译检查](./images/a_compile_check.png)
 
 **验证范围：** 上述检查独立于模块二、三进行，但只验证代码能否编译，不能证明映射、引用计数、权限和 TLB 的运行行为正确。新建映射、同页重复映射、替换物理页、共享映射、重复删除和分配失败等功能路径，仍需在后续运行测试中验证。
+
+---
+
+### 5.2 功能模块二编译检查
+
+**负责人：** 2410439-吴佳璐
+
+**测试目的：** 检查 `proc.c` 中新增的 `alloc_proc()`、`proc_init()`、`kernel_thread()`、`do_fork()`、`copy_thread()` 和 `copy_mm()` 能否与框架已有的 `get_pid()`、`hash_proc()`、`find_proc()`、`setup_kstack()`、`put_kstack()`、`forkret`、`wakeup_proc()`、`kmalloc()` 等接口一起通过 RISC-V 工具链编译，确认函数签名、结构体字段和宏定义没有冲突。
+
+**执行方法：** 在已安装实验工具链的 WSL 环境中，进入项目的 `code` 目录，执行：
+
+```bash
+cd /mnt/d/OS_CS/OS_lab/lab4/OS_lab/code
+make -B obj/kern/process/proc.o
+```
+
+其中 `-B` 强制重新编译，避免已有目标文件使检查被跳过。该命令只生成 `proc.o`，不链接完整内核，因此不依赖模块三尚未实现的 `schedule()`、`proc_run()`、`cpu_idle()` 和 `switch_to`。
+
+**预期结果：** 命令输出 `+ cc kern/process/proc.c`，正常结束并生成 `obj/kern/process/proc.o`，无编译错误；若存在警告，需结合具体内容判断并记录。
+
+**实际结果：** 命令输出为：
+
+```text
++ cc kern/process/proc.c
+```
+![B部分测试](./images/b_test.png)
+
+
+
 
 ---
 
