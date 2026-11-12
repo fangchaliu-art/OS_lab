@@ -83,7 +83,98 @@ void print_regs(struct pushregs *gpr)
 
 extern struct mm_struct *check_mm_struct;
 
-//lab3 请补充你在lab3中的代码
+
+/* interrupt_handler - 处理中断，即 scause 最高位为 1 的 Trap。
+ *
+ * 收到 S 模式时钟中断时，先重设下一次时钟事件，再累加 ticks；每累计
+ * TICK_NUM 次时钟中断输出一次统计信息，随后继续运行，不主动关机。
+ *
+ * 其他中断只按类型输出提示；无法识别的原因输出原因码并打印 trapframe，
+ * 便于调试。
+ */
+void interrupt_handler(struct trapframe *tf) {
+    // 去掉 scause 的最高位，得到中断原因码
+    uintptr_t cause = tf->cause & ~((uintptr_t)1 << 63);
+
+    switch (cause) {
+    case IRQ_S_TIMER:
+        // 重新设置下一次时钟事件；否则系统只会收到一次时钟中断，
+        // 之后不会再有新的时钟中断到来
+        clock_set_next_event();
+        ticks++;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+        }
+        break;
+    case IRQ_U_SOFT:
+        cprintf("User software interrupt\n");
+        break;
+    case IRQ_S_SOFT:
+        cprintf("Supervisor software interrupt\n");
+        break;
+    case IRQ_H_SOFT:
+        cprintf("Hypervisor software interrupt\n");
+        break;
+    case IRQ_M_SOFT:
+        cprintf("Machine software interrupt\n");
+        break;
+    case IRQ_U_TIMER:
+        cprintf("User timer interrupt\n");
+        break;
+    case IRQ_H_TIMER:
+        cprintf("Hypervisor timer interrupt\n");
+        break;
+    case IRQ_M_TIMER:
+        cprintf("Machine timer interrupt\n");
+        break;
+    case IRQ_U_EXT:
+        cprintf("User external interrupt\n");
+        break;
+    case IRQ_S_EXT:
+        cprintf("Supervisor external interrupt\n");
+        break;
+    case IRQ_H_EXT:
+        cprintf("Hypervisor external interrupt\n");
+        break;
+    case IRQ_M_EXT:
+        cprintf("Machine external interrupt\n");
+        break;
+    case IRQ_COP:
+        cprintf("Coprocessor interrupt\n");
+        break;
+    case IRQ_HOST:
+        cprintf("Host interrupt\n");
+        break;
+    default:
+        cprintf("Unknown interrupt: cause %d\n", (int)cause);
+        print_trapframe(tf);
+        break;
+    }
+}
+
+/* exception_handler - 处理异常，即 scause 最高位为 0 的 Trap。
+ *
+ * 对非法指令异常和断点异常，打印异常信息并按指令长度更新 tf->epc，
+ * 使 sret 返回后跳过触发指令继续执行；其他异常打印完整 trapframe 便于调试。
+ *
+ * 指令长度由指令低两位决定：低两位为 11 时为 4 字节指令，否则为 2 字节
+ * 压缩指令。本实验运行在内核态，tf->epc 指向内核代码段，可安全解引用。
+ */
+void exception_handler(struct trapframe *tf) {
+    switch (tf->cause) {
+    case CAUSE_ILLEGAL_INSTRUCTION:
+        cprintf("Illegal instruction at 0x%08x\n", tf->epc);
+        tf->epc += ((*(uint32_t *)tf->epc & 0x3) == 0x3) ? 4 : 2;
+        break;
+    case CAUSE_BREAKPOINT:
+        cprintf("Breakpoint at 0x%08x\n", tf->epc);
+        tf->epc += ((*(uint32_t *)tf->epc & 0x3) == 0x3) ? 4 : 2;
+        break;
+    default:
+        print_trapframe(tf);
+        break;
+    }
+}
 
 
 
