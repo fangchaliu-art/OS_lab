@@ -165,8 +165,22 @@ void interrupt_handler(struct trapframe *tf)
     }
 }
 
-//lab5 function1 YOUR CODE update exception_handler
-
+//lab5 function1 2412084 update exception_handler
+void exception_handler(struct trapframe *tf)
+{
+    switch (tf->cause)
+    {
+    case CAUSE_USER_ECALL:
+        /* ecall is 4 bytes; return to the instruction after it. */
+        tf->epc += 4;
+        syscall();
+        break;
+    default:
+        print_trapframe(tf);
+        panic("unknown exception");
+        break;
+    }
+}
 
 static inline void trap_dispatch(struct trapframe *tf)
 {

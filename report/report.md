@@ -42,25 +42,6 @@
 | 2410826-马伊汀 | Claude Code for VS Code | DeepSeek-V4-Flash   | |
 | 2410439-吴佳璐 | Claude Code for VS Code | DeepSeek-V4.1-Flash | |
 
-编译与运行环境如下，AI 工具信息按各成员实际使用情况记录。
-
-| 项目 | 配置 |
-| --- | --- |
-| 宿主系统与开发环境 | Windows、WSL Ubuntu 22.04 |
-| 目标架构 | RISC-V RV64，Sv39 分页 |
-| 编译工具链 | `riscv64-unknown-elf-gcc` 及配套工具，目录为 `/home/user/compiler-lab/riscv-elf-toolchains/bin` |
-| 构建工具 | GNU Make |
-| 模拟器 | QEMU 4.1.1，使用 `/home/user/os-lab/qemu-4.1.1/build/riscv64-softmmu/qemu-system-riscv64` |
-| 工程代码目录 | Windows：`D:/OS_lab/OS_lab/code`；WSL：`/mnt/d/OS_lab/OS_lab/code` |
-
-在 WSL 终端中使用以下配置进行构建与运行。各成员可按本机安装位置调整工具路径。
-
-```bash
-export PATH=/home/user/compiler-lab/riscv-elf-toolchains/bin:$PATH
-QEMU411=/home/user/os-lab/qemu-4.1.1/build/riscv64-softmmu/qemu-system-riscv64
-```
-
----
 
 ## 三、实验整体逻辑分析
 
@@ -104,7 +85,7 @@ Lab5 在前序实验的物理内存管理、中断处理、内核线程创建和
 
 **提示词的复用、更新与设计：**
 
-- **复用已有提示词。** `page_init()`、`interrupt_handler()`、`page_insert()`、`page_remove()`、`proc_init()`、`copy_thread()`、`proc_run()`、`cpu_idle()`、`schedule()`、`switch_to()` 及 `__alltraps` 的基础要求来自前序实验。复用时调整实验名称、目标路径、占位注释和学号，核对当前接口，并按本次分工提取需要生成的函数，保留原有功能规格作为基础。
+- **复用已有提示词。** `page_init()`、`interrupt_handler()`、`page_insert()`、`page_remove()`、`proc_init()`、`copy_thread()`、`proc_run()`、`cpu_idle()`、`schedule()`、`switch_to()` 及 `__alltraps` 的基础要求来自前序实验。
 - **更新提示词以适配 Lab5。** 在 Lab3 Trap 入口与上下文恢复提示词中，更新 `RESTORE_ALL` 的规格：由原先的纯内核恢复扩展为根据 trapframe 中的 `SSTATUS_SPP` 区分用户态、内核态返回，配套处理用户栈、内核栈和 `sscratch`，并兼容首次进入新进程时人工构造的 trapframe。其他复用提示词也进行必要的场景调整，例如时钟处理中取消“三次输出后关机”并增加调度请求，页映射处理中复用现有 `page_remove_pte()`，调度处理中按当前已适配 Sv39 的 `lsatp()` 接口更新依赖说明。
 - **新设计 First-Fit 提示词。** 原 Lab2 的 First-Fit 是框架提供的完整实现，没有独立生成提示词，因此依据原代码、算法说明及本次接口，按 `[PROMPT]`、`[RELY]`、`[GUARANTEE]`、`[SPECIFICATION]` 四段式重新设计，明确空闲链表、连续页分配、拆分、释放合并、引用状态和接口表的要求，再据此生成补码。
 
@@ -134,7 +115,6 @@ Lab5 在前序实验的物理内存管理、中断处理、内核线程创建和
 5. **线程初始化与初始现场。** `proc_init()` 先初始化进程链表和 PID 散列表，再建立 idle 及 init 线程，正确设置 `current`、状态、PID 和进程计数。`copy_thread()` 在新线程内核栈顶构造 trapframe，设置子进程返回值和首次执行的 `context.ra`、`context.sp`，区分内核线程栈与传入的用户栈，不修改调用者的模板。
 6. **调度与切换。** `schedule()` 在中断保护下清除调度请求并选择 `PROC_RUNNABLE` 进程，无可运行进程时回退到 idle；`proc_run()` 在切换前更新 `current`，按 RV64/Sv39 编码装载目标页表并刷新 TLB；`switch_to()` 按 `struct context` 的布局保存、恢复 `ra`、`sp`、`s0`～`s11`；`cpu_idle()` 在需要重调度时调用调度器。
 7. **边界与失败处理。** 覆盖内存不足、空闲块拆分与合并、重复取消映射、同页重新映射、无可运行进程及首次线程切换等情况；保持页表、引用计数、链表和进程状态一致，按进入临界区前的状态恢复中断，不依赖旧实验仅支持内核线程的假设。
-8. **验证与记录。** 先核对声明、定义和数据布局并进行相关目标文件的编译检查，再在依赖齐全后完成链接与运行验证；异常返回应覆盖用户态返回、内核态返回及初始 trapframe 恢复路径。后续模块缺失或其他依赖导致的阻塞应单独记录，不通过空函数桩、修改测试或伪造结果绕过；实际执行结果填写在迭代记录和测试章节中，不能仅凭代码已填写就认定验证通过。
 
 #### 为 First-Fit 新设计的提示词
 
@@ -259,19 +239,6 @@ const struct pmm_manager default_pmm_manager;
 
 **Post-Condition：** 返回当前空闲物理页总数 `nr_free`，不修改任何管理状态；返回值不是空闲块数量。
 
-### 验证要求
-
-先进行静态核对，检查全局对象链接属性、管理器回调、链表顺序、块长、页面标志、引用计数及空闲页计数的一致性。
-
-在仓库的 `code` 目录执行目标文件编译检查：
-
-```bash
-make -B obj/kern/mm/default_pmm.o
-```
-
-待其他模块具备构建和运行条件后，再执行完整构建及 QEMU 验证，观察已有 `basic_check()`、`default_check()` 是否正常通过。重点核对整块分配、拆分、连续空间不足、不同顺序释放及前后合并等行为。
-
-若其他待补代码导致完整构建或运行失败，应说明具体阻塞原因，只报告已实际执行的检查结果，不补写其他模块、不修改测试，也不将预期输出写成已通过。
 ````
 
 #### 为 RESTORE_ALL 更新的提示词
@@ -487,23 +454,6 @@ __alltraps:
 - 需要分支标签时，使用与 `.altmacro` 配套的 `LOCAL` 等方式避免宏多次展开时符号冲突。
 - 不在宏内执行 `sret`，继续使用已有 `__trapret` 的返回指令。
 
-## 验证要求
-
-在仓库的 `code` 目录单独编译目标文件：
-
-```bash
-make -B obj/kern/trap/trapentry.o
-```
-
-检查以下内容：
-
-- 汇编语法、宏展开和符号引用正确。
-- 恢复字段的偏移及宽度与当前 `SAVE_ALL` 一致。
-- 调用 `trap()` 时参数正确、栈对齐，返回后仍定位到原 trapframe。
-- 返回 S 模式时，内核栈指针正确，`sscratch == 0`。
-- 返回 U 模式时，用户栈指针正确，`sscratch` 保存有效内核栈指针。
-- 在其他模块具备运行条件时，验证用户态进入内核后能返回，以及人工构造 trapframe 的首次执行路径。
-- 若相关模块尚未完成，只报告实际完成的静态检查和编译结果，不修改其他模块来伪造完整测试通过。
 ````
 
 ### 功能模块一：用户态系统调用功能
@@ -514,23 +464,360 @@ make -B obj/kern/trap/trapentry.o
 
 **需要实现/修改的函数：**
 
+```c
+// code/kern/trap/trap.c
+void exception_handler(struct trapframe *tf);
 
+// code/kern/syscall/syscall.c
+void syscall(void);
+static int sys_exit(uint64_t arg[]);
+static int sys_fork(uint64_t arg[]);
+static int sys_wait(uint64_t arg[]);
+static int sys_exec(uint64_t arg[]);
+static int sys_yield(uint64_t arg[]);
+static int sys_kill(uint64_t arg[]);
+static int sys_getpid(uint64_t arg[]);
+static int sys_putc(uint64_t arg[]);
+static int sys_pgdir(uint64_t arg[]);
+
+// code/kern/mm/pmm.c，页表查看依赖
+void print_pgdir(void);
+
+// code/user/libs/syscall.c，用户态系统调用公共封装
+static inline int syscall(int64_t num, uint64_t arg0, uint64_t arg1,
+                          uint64_t arg2, uint64_t arg3, uint64_t arg4);
+```
+
+用户态各 `sys_*()` 包装函数同步适配固定五参数入口，未使用的参数槽补零；页表遍历所需的内部辅助函数随 `print_pgdir()` 一并实现。
 
 **功能说明：**
 
+本模块负责建立用户程序访问内核服务的统一通道，连接用户态 `ecall`、异常处理、系统调用分发和返回值写回。用户程序通过库函数把系统调用号放入 `a0`，把最多五个参数放入 `a1`～`a5`，再触发异常；内核根据保存的 trapframe 识别请求、执行相应服务，并将正常返回的结果写入用户可见的 `a0`，由已有 Trap 返回流程恢复执行。
 
-**主要要求（spec）：**
+`exception_handler()` 识别 `CAUSE_USER_ECALL`，先将 `tf->epc` 增加 4，使返回后继续执行下一条指令，再调用 `syscall()`。`syscall()` 从 `current->tf` 读取完整宽度的调用号和参数，检查编号范围及分发表项是否有效，然后调用对应的 `sys_*()` 包装函数。对越界编号或未注册编号返回 `-E_INVAL`；对正常返回的调用，将结果按有符号值扩展后写回 `a0`，保留其他模块对返回地址、用户栈等现场字段的有效修改。
 
+各包装函数将统一参数转换为具体内核接口所需的类型：`sys_exit()`、`sys_fork()`、`sys_wait()`、`sys_exec()`、`sys_yield()` 和 `sys_kill()` 分别转交退出、复制、等待、程序替换、让出 CPU 和终止请求；`sys_getpid()` 返回当前进程号，`sys_putc()` 通过 `cputchar()` 输出字符，`sys_pgdir()` 提供页表查看入口。页表查看入口现已调用真实的内核 `print_pgdir()`，只读遍历活动的 Sv39 页表，并对未对齐的大页叶子输出诊断。
 
+本模块与前置代码中的 Trap 入口、`RESTORE_ALL` 及用户态系统调用封装共同维护寄存器传参与返回约定；与模块二的 `do_wait()`、`do_execve()`、模块三的 `do_fork()` 及模块四的 `do_exit()`、`do_yield()`、`do_kill()` 协作完成具体进程操作。包装层只转换和传递参数，不重复管理进程树、页表或资源；涉及用户指针的参数由实际访问数据的下层接口结合 `current->mm` 和 `user_mem_check()` 检查范围及读写权限。完整运行还需这些下层实现和用户态封装共同满足接口约定。
 
 #### 最终提示词
 
-以下是经过迭代优化后，最终成功实现该功能的提示词：
-
 ````markdown
+# 功能模块一：用户态系统调用提示词
 
+[PROMPT]
+
+**任务：**
+
+在当前 RISC-V ucore Lab5 项目中实现用户态系统调用功能，修改以下实际文件：
+
+- `D:/OS_lab/OS_lab/code/kern/trap/trap.c`
+- `D:/OS_lab/OS_lab/code/kern/syscall/syscall.c`
+- `D:/OS_lab/OS_lab/code/kern/mm/pmm.c`：仅补齐 `print_pgdir()` 及内部辅助函数。
+- `D:/OS_lab/OS_lab/code/user/libs/syscall.c`：仅修复内部系统调用封装及对应调用点。
+
+完成 `exception_handler()`、`syscall()` 及九个 `sys_*()` 包装函数，建立“用户态 ecall → 异常处理 → 系统调用分发 → 内核服务 → 返回值写回”的调用链。
+
+**操作要求：**
+
+必须修改项目中的实际文件，不能只展示代码。
+
+先阅读当前代码和依赖定义，在 `lab5 function1 YOUR CODE` 对应位置实现本模块，将对应的 `YOUR CODE` 替换为学号 `2412084`，保留 `lab5 function1` 标记及已有说明。
+
+允许在上述文件中补充必要的头文件和函数声明。当前 `syscalls[]` 位于补码位置之前，必须在分发表前添加匹配的 `static` 函数声明，确保初始化分发表时相关函数已经声明。保留已实现的正确逻辑，新增依赖代码用 `lab5 function1 2412084` 注释说明用途。
+
+保留已有系统调用编号、分发表结构及公共接口，仅按上述范围修复用户态封装和页表打印依赖，不修改其他实验模块、Makefile 或测试代码。
+
+不实现或覆盖模块二、三、四中的 `do_*()` 函数，不通过空函数绕过缺失依赖。本任务不实现 COW 或页故障处理。
+
+**输出要求：**
+
+完成后说明修改位置、寄存器传参关系、分发表检查方式、各包装函数对应的内核接口及实际验证结果。
+
+区分单文件编译、完整链接和运行测试。依赖尚未实现导致的警告、错误或无法执行的测试，应如实说明，不将预计结果写成测试通过。
+
+[RELY]
+
+## 1. 当前框架与数据结构
+
+以实际文件为准核对：
+
+- `kern/trap/trap.c`、`kern/trap/trap.h`
+- `kern/syscall/syscall.c`、`kern/syscall/syscall.h`
+- `kern/process/proc.h`
+- `kern/mm/pmm.h`、`kern/mm/vmm.h`
+- `libs/unistd.h`、`libs/error.h`、`libs/riscv.h`
+- `user/libs/syscall.c`
+
+`current` 指向当前进程，`current->tf` 指向当前系统调用使用的 trapframe。
+
+trapframe 的通用寄存器通过 `tf->gpr` 访问；异常返回地址为 `tf->epc`，异常原因为 `tf->cause`。
+
+## 2. 用户态调用约定
+
+当前工程使用：
+
+- `a0`：系统调用号；
+- `a1`～`a5`：最多五个参数；
+- 返回时的 `a0`：系统调用返回值。
+
+不能套用其他系统以 `a7` 保存系统调用号的约定。
+
+`ecall` 指令长度固定为 4 字节。处理 `CAUSE_USER_ECALL` 时，必须在调用 `syscall()` 前将保存的 `epc` 增加 4，使复制进程现场及异常返回均采用下一条指令的地址。
+
+`uint64_t arg[5]` 保存原始参数。指针参数应通过 `uintptr_t` 转换，避免截断 RV64 地址。
+
+## 3. 已有进程管理接口
+
+```c
+int do_exit(int error_code);
+int do_fork(uint32_t clone_flags, uintptr_t stack,
+            struct trapframe *tf);
+int do_wait(int pid, int *code_store);
+int do_execve(const char *name, size_t len,
+              unsigned char *binary, size_t size);
+int do_yield(void);
+int do_kill(int pid);
+```
+
+这些接口由其他功能模块负责实现，本模块负责正确调用并传递返回值。
+
+辅助接口包括：
+
+- `cputchar()`：输出字符；
+- `print_trapframe()`：打印异常现场；
+- `panic()`：报告无法继续处理的异常；
+- `user_mem_check()`：依据地址空间和读写要求检查内存范围。
+
+## 4. 参数检查的职责
+
+系统调用包装函数不直接解引用用户指针。
+
+`sys_wait()` 将用户退出码存储地址传给 `do_wait()`；由实际执行写入的进程管理层验证地址可写，并处理允许的空指针语义。
+
+`sys_exec()` 将名称、长度、程序镜像地址和大小传给 `do_execve()`；由实际读取或复制这些数据的执行层完成范围、访问权限及长度检查。
+
+检查下层实现是否具备这些验证；尚未实现时，将其列为模块间接口要求。不能因为当前下层未完成，就越界补写其他模块或声称用户指针安全性已经验证。
+
+不得将本框架的 exec 接口改成文件路径、argv 形式，也不得拒绝框架合法的内核发起程序加载路径。
+
+## 5. 页表打印依赖
+
+当前内核 `pmm.h` 声明了：
+
+```c
+void print_pgdir(void);
+```
+
+但当前内核代码尚未提供其定义；用户库中的同名函数不是内核实现，不能拿来链接内核。
+
+执行任务时重新核对：
+
+- 如果已有真实内核实现，核对其适用于当前 Sv39 页表后复用。
+- 如果仍只有声明，在 `kern/mm/pmm.c` 中实现 `print_pgdir()` 及必要的内部辅助函数。读取当前 `satp`，正确屏蔽 MODE、ASID 并提取根页表物理地址，结合当前 `KADDR()` 和页表宏只读遍历活动页表。
+- `sys_pgdir()` 必须调用真实打印接口并返回 0，不再允许以 `-E_UNIMP` 作为完成结果。
+
+不得添加空的 `print_pgdir()`，不得在未打印任何内容时返回成功。
+
+## 6. 用户态封装依赖修复
+
+当前用户库将 `ret` 定义为 4 字节 `int`，却通过 `sd` 写入 8 字节；可变参数循环还无条件读取五项，而多个调用点没有提供五个参数。必须修复这两处问题，并检查内联汇编的寄存器约束。
+
+内部封装改为“调用号 + 五个寄存器宽度参数”的固定参数接口，各公开包装函数为未使用参数补零，指针经 `uintptr_t` 转换。保持用户库公开函数签名不变。以寄存器宽度的有符号变量接收返回值，最后转换为 `int`。
+
+使用绑定寄存器变量和正确的输入输出约束传递 `a0`～`a5`；`a0` 既是调用号输入也是返回值输出，其他实际改写的寄存器必须准确建模，并保留必要的 `memory` clobber。禁止向窄对象写入宽值，禁止继续读取未提供的可变参数。
+
+[GUARANTEE]
+
+必须实现下列接口，保持签名一致：
+
+```c
+void exception_handler(struct trapframe *tf);
+void syscall(void);
+
+static int sys_exit(uint64_t arg[]);
+static int sys_fork(uint64_t arg[]);
+static int sys_wait(uint64_t arg[]);
+static int sys_exec(uint64_t arg[]);
+static int sys_yield(uint64_t arg[]);
+static int sys_kill(uint64_t arg[]);
+static int sys_getpid(uint64_t arg[]);
+static int sys_putc(uint64_t arg[]);
+static int sys_pgdir(uint64_t arg[]);
+```
+
+交付结果必须满足：
+
+- 用户态系统调用能够进入正确的分发入口。
+- 系统调用号经过完整范围检查，分发表空槽不会被调用。
+- 参数顺序、宽度和类型与当前用户态约定及内核接口一致。
+- 正常返回的系统调用结果写回当前调用现场的 `a0`。
+- 负错误码写回 RV64 寄存器时保持正确的有符号扩展。
+- 包装函数不重复实现进程管理、调度或资源回收。
+- 页表查看输出活动页表的真实映射；用户态封装不存在宽度不匹配的写入或缺失可变参数读取。
+
+[SPECIFICATION]
+
+## 1. exception_handler
+
+**Pre-Condition：**
+
+- `tf` 指向有效的异常现场。
+- 已有 Trap 入口完成寄存器保存。
+- 对于用户态系统调用，`current` 和 `current->tf` 有效，且 `current->tf` 对应本次现场。
+
+**Post-Condition：**
+
+- 遇到 `CAUSE_USER_ECALL` 时，先执行 `tf->epc += 4`，再调用 `syscall()`。
+- 系统调用正常返回后，保留修改后的 trapframe，交给已有异常返回流程。
+- 不在本函数内执行 `sret`，不再次增加系统调用返回地址。
+
+**Case 1：用户态系统调用。**
+
+识别 `CAUSE_USER_ECALL`，更新返回地址并转交系统调用分发。
+
+**Case 2：其他异常。**
+
+当前任务不实现其他异常的业务处理。若已有有效处理分支，则保留；若框架没有提供处理逻辑，则打印异常现场并通过 `panic()` 明确终止，不能静默返回并反复触发同一异常。
+
+**Requirements：**
+
+- 不将所有异常统一当成系统调用。
+- 不将未知异常直接跳过。
+- 不修改 `interrupt_handler()`、`trap()`、`SAVE_ALL` 或 `RESTORE_ALL`。
+
+## 2. syscall
+
+**Pre-Condition：**
+
+- `current != NULL` 且 `current->tf != NULL`。
+- trapframe 中保存本次调用号及参数。
+- 对应的 ecall 返回地址已由异常处理函数推进。
+
+**Post-Condition：**
+
+- 合法且已注册的调用恰好执行一次。
+- 调用结果写入本次 trapframe 的 `gpr.a0`。
+- 非法编号或分发表空槽返回 `-E_INVAL`，不访问越界内存，不调用空函数指针。
+- 不修改无关的通用寄存器或再次调整 `epc`。
+
+**Case 1：有效调用号。**
+
+使用完整寄存器宽度读取 `a0`，确认其小于 `NUM_SYSCALLS` 且表项非空，再提取 `a1`～`a5` 组成参数数组并调用对应函数。
+
+**Case 2：越界调用号。**
+
+包括过大的编号和以负数位模式传入的编号，均安全返回错误。不得先截断为 `int`，使高位非零的非法编号变成有效编号。
+
+**Case 3：编号位于数组范围内但未注册。**
+
+检查表项是否为空，安全返回错误。
+
+**Case 4：系统调用改变执行状态。**
+
+`do_wait()` 等函数可能阻塞并在稍后恢复；正常返回时仍应向原调用现场写回结果。`do_execve()` 可能更新该现场的入口地址和用户栈，分发器不得用旧快照覆盖这些修改。
+
+`do_exit()` 成功时通常不再返回，不要求强行执行返回值写回。
+
+**Requirements：**
+
+- 可用断言检查内核内部的 `current`、`tf` 前提。
+- 在调用前保存本次 trapframe 指针。
+- 先完成编号和空表项检查，再调用分发表。
+- 将 `int` 返回值按有符号值扩展到寄存器宽度。
+- 保留现有分发表中的系统调用编号，不新增无关调用。
+
+## 3. sys_* 包装函数
+
+**Pre-Condition：**
+
+`arg` 指向按 `a1`～`a5` 顺序提取的五个参数，当前进程及调用现场有效。
+
+**Post-Condition：**
+
+各函数按下表转换参数并调用对应接口，不添加与接口语义无关的状态修改。
+
+| 函数 | 参数与行为 |
+| --- | --- |
+| `sys_exit` | 将 `arg[0]` 转为退出码，调用 `do_exit()`。 |
+| `sys_fork` | 调用 `do_fork(0, current->tf->gpr.sp, current->tf)`，使用保存的用户栈指针，不能使用内核当前 sp。 |
+| `sys_wait` | 将 `arg[0]` 转为 PID，将 `arg[1]` 经 `uintptr_t` 转为 `int *`，调用 `do_wait()`。 |
+| `sys_exec` | 按名称指针、名称长度、镜像指针、镜像大小的顺序，将 `arg[0]`～`arg[3]` 传给 `do_execve()`。 |
+| `sys_yield` | 调用 `do_yield()`，不在包装层直接实现调度。 |
+| `sys_kill` | 将 `arg[0]` 转为 PID，调用 `do_kill()`。 |
+| `sys_getpid` | 返回 `current->pid`。 |
+| `sys_putc` | 将 `arg[0]` 转为字符输出接口所需类型，调用 `cputchar()`，完成后返回 0。 |
+| `sys_pgdir` | 调用真实的内核 `print_pgdir()`，完成后返回 0。 |
+
+**Requirements：**
+
+- 原样传递下层函数返回的成功值或负错误码。
+- 无参数调用不读取无关参数。
+- 不在包装层直接读取或写入用户指针指向的数据。
+- 不自行更新进程树、释放页面、修改引用计数或切换页表。
+- `sys_getpid()`、`sys_putc()` 等简单调用也必须经过统一分发入口返回结果。
+
+## 4. 页表打印与用户态封装的补充规格
+
+**Pre-Condition：** Sv39 分页及内核直接映射已建立，当前页表由内核管理，遍历期间不会被并发修改。
+
+**Post-Condition：** 页表打印输出真实的映射级别、虚拟地址范围、物理地址及权限，不分配或释放页面，不修改页表、引用计数或进程状态。用户态封装完整传递参数和返回值，并保持原有 ABI。
+
+**Requirements：**
+
+- 按 Sv39 三级、每级 512 项遍历；先检查有效位，再根据 R/W/X 区分叶子与非叶子。支持 1 GiB、2 MiB 和 4 KiB 叶子，不得将大页叶子当成下级页表解引用。
+- 输出正常叶子映射前，必须验证其物理地址按当前级别的页面大小对齐。根据 `level` 计算 `size = (uintptr_t)1 << (PGSHIFT + 9 * level)`，检查 `(pa & (size - 1)) == 0`；level 2 的 1 GiB 叶子要求低 30 位为零，level 1 的 2 MiB 叶子要求低 21 位为零。未对齐时输出包含级别、虚拟地址、物理地址和所需对齐大小的诊断，跳过该表项并继续遍历，不输出普通有效映射、不进入下级递归，也不修改原表项。
+- 正确处理高半区虚拟地址的符号扩展及最高地址区间的溢出，可以输出起始地址和长度。权限来自真实表项，打印参数类型与格式符一致。
+- 核对物理地址范围后再进行地址转换。异常表项或不支持的分页模式应明确诊断，不能越界读取或递归到数据页；不得照搬当前文件中面向旧架构的两级页表辅助逻辑。
+- 零参数、少参数和完整五参数调用都显式提供五个槽位。返回值接收宽度与汇编输出一致，负错误码保持符号，所有实际改写的寄存器均反映在汇编约束中。
 
 ````
+
+#### 实现迭代过程
+
+本模块已完成两次迭代：第一次修复页表查看功能缺失和用户态封装问题，第二次补齐大页对齐诊断。当前已通过相应静态检查与编译检查，完整运行验证待后续联合测试。
+
+---
+
+##### 第一次迭代
+
+**遇到的问题：**
+
+- **问题1：页表查看接口仅返回未实现错误。** `kern/syscall/syscall.c` 中的 `sys_pgdir()` 返回 `-E_UNIMP`，没有输出页表。检查发现内核 `pmm.h` 只有 `print_pgdir()` 声明，没有对应定义。原提示词限制修改范围，并允许依赖缺失时返回未实现错误，因此生成结果虽然符合该临时约定，却没有满足模块一的页表查看功能要求。这属于功能缺失，不能仅凭编译通过认定模块完成。
+- **问题2：原有用户态封装存在宽度与参数读取问题。** `user/libs/syscall.c` 将返回值变量 `ret` 定义为 4 字节 `int`，却使用 RV64 的 `sd` 写入 8 字节，存在覆盖相邻内存的风险；同时，无论调用方实际传入多少参数，都固定读取五个可变参数，零参数或少参数调用会读取未提供的参数。该问题来自原框架，原提示词将用户库排除在修改范围外，因此第一次生成未修复。内联汇编还需一并核对参数寄存器的输入输出约束，确保编译器知道实际被修改的寄存器。
+
+  实验手册列出的 `void syscall(void)` 位于内核 `kern/syscall/syscall.c`。本次额外修改的是框架已有的 `user/libs/syscall.c` 中的 `static inline int syscall(...)`，属于为保证系统调用链路正确而进行的框架依赖修复。上述参数读取发生在执行 `ecall` 之前，返回值存储发生在异常返回之后，均由用户态封装执行。新增内核代码即使遵循寄存器传参约定，也无法消除这些用户态操作中的未定义行为和越界写入风险，因此修复需要落实到用户库内部。
+
+**问题解决策略：**
+
+- **针对问题1：** 扩大提示词的必要依赖修改范围，允许在 `kern/mm/pmm.c` 实现已有声明的 `print_pgdir()` 及内部辅助函数。要求只读遍历当前活动的 Sv39 页表，区分非叶子表项与不同级别的叶子映射，输出虚拟地址范围、物理映射及权限；禁止修改页表或引用计数。`sys_pgdir()` 必须调用真实打印接口，完成后返回 0，取消以 `-E_UNIMP` 作为完成结果的约定。
+- **针对问题2：** 允许修改 `user/libs/syscall.c` 的内部封装及对应调用点，采用固定五参数的内部接口，不使用无条件读取五项的可变参数循环；各公开包装函数为未使用参数补零，指针转换保持 RV64 宽度。使用寄存器宽度的有符号变量接收结果，并通过正确的内联汇编约束绑定 `a0`～`a5`，最后转换为公开接口要求的 `int`。保持系统调用号和用户库公开函数签名不变。
+
+  本次选用固定五参数方案，使每个参数都有明确来源。例如无参数的 `sys_fork()` 调用 `syscall(SYS_fork, 0, 0, 0, 0, 0)`。内部通过寄存器变量将调用号绑定到 `a0`、参数绑定到 `a1`～`a5`，并以 `"+r"(a0)` 声明 `a0` 同时承担调用号输入和返回值输出。执行 `ecall` 后使用 `return (int)a0` 完成类型转换，从而消除原来向 4 字节 `ret` 手写 8 字节存储的问题。固定五参数是本次采用的具体修复方案，原框架缺陷及其修复范围在迭代记录中明确说明。
+
+**本轮验证结果：**
+
+修订提示词后已完成上述两项主要问题的代码修复：`sys_pgdir()` 已调用真实的 `print_pgdir()`，后者读取当前 `satp` 并遍历 Sv39 页表；用户态封装已改为固定五参数，未使用参数补零，使用寄存器宽度变量接收返回值，取消了原来的可变参数读取和宽写窄存。
+
+已使用现有 RISC-V GCC 工具链强制重新编译 `obj/kern/trap/trap.o`、`obj/kern/syscall/syscall.o`、`obj/kern/mm/pmm.o` 和 `obj/user/libs/syscall.o`，四个目标均通过，未出现编译警告或错误。进一步检查用户库目标文件反汇编，确认调用号位于 `a0`、参数位于 `a1`～`a5`，未使用参数正确补零，`ecall` 后通过 `sext.w` 转换为 `int` 返回，没有原来的越界存储。复查发现大页对齐诊断缺失。
+
+##### 第二次迭代
+
+**遇到的问题：**
+
+`kern/mm/pmm.c` 的 `pgdir_print_table()` 能区分不同级别的叶子表项，但在输出 1 GiB 或 2 MiB 映射前，没有检查叶子表项中的物理地址是否按该级页面大小对齐。对于物理地址未对齐的大页表项，处理器不能将其作为合法的大页翻译，而当前打印逻辑仍会输出普通映射信息，可能误导页表诊断。
+
+**问题解决策略：**
+
+在提示词的页表打印规格中补充级别相关的物理地址对齐检查：根据 `level` 计算 `size = 1ULL << (PGSHIFT + 9 * level)`，在输出正常叶子映射前确认 `(pa & (size - 1)) == 0`。1 GiB 叶子需按 1 GiB 对齐，2 MiB 叶子需按 2 MiB 对齐；发现不对齐时打印明确的异常诊断并跳过该表项，继续遍历其他项，不将其输出为有效映射，也不修改或修复原页表。
+
+**本轮验证结果：**
+
+已补齐叶子物理地址对齐检查。静态复查确认：代码根据页表级别计算 1 GiB、2 MiB 或 4 KiB 页面大小，在正常映射输出前检查 `(pa & (size - 1))`；未对齐时打印包含页面大小、虚拟地址、物理地址及所需对齐值的诊断，并通过 `continue` 跳过当前项，不进入下级递归、不修改页表或引用计数。正常对齐项继续沿原有路径输出。
+
+已使用现有 RISC-V GCC 工具链执行 `make -B obj/kern/mm/pmm.o`，目标重新编译通过，未出现编译警告或错误。
+
+---
 
 ### 功能模块二：创建加载第一个用户进程功能
 
@@ -540,30 +827,264 @@ make -B obj/kern/trap/trapentry.o
 
 **需要实现/修改的函数：**
 
+```c
+// code/kern/process/proc.c
+static int init_main(void *arg);
+static struct proc_struct *alloc_proc(void);
+int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags);
+int do_wait(int pid, int *code_store);
+static int user_main(void *arg);
+static int kernel_execve(const char *name, unsigned char *binary, size_t size);
+int do_execve(const char *name, size_t len, unsigned char *binary, size_t size);
+static int load_icode(unsigned char *binary, size_t size);
+
+// code/kern/mm/pmm.c，失败清理及旧地址空间回收依赖
+void exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end);
+
+// code/kern/mm/kmalloc.c，内存回收验证所需统计
+size_t slob_allocated(void);
+size_t kallocated(void);
+size_t kmalloc_pages(void);
+```
+
+分配器内部的小对象分配、释放和大块页分配、释放路径同步维护真实存活量，arena 扩容路径记录持有页数；`kmalloc.h` 补充 `kmalloc_pages()` 声明，供 `init_main()` 查询。
 
 **功能说明：**
 
+本模块负责把内核线程运行环境扩展为能够加载并执行第一个用户程序的环境。已有 `proc_init()` 建立 `idleproc` 并创建执行 `init_main()` 的内核线程；`alloc_proc()` 初始化包含等待状态、退出码和亲属关系在内的进程控制块，`kernel_thread()` 构造内核线程初始现场，并通过模块三的 `do_fork()` 创建线程。`init_main()` 随后创建执行 `user_main()` 的过渡线程，自己通过 `do_wait()` 等待并回收后续退出的子进程。
+
+`user_main()` 根据默认配置或测试宏选择嵌入内核镜像的用户程序，经 `KERNEL_EXECVE` / `KERNEL_EXECVE2` 调用 `kernel_execve()`。`do_execve()` 验证输入并处理旧地址空间，`load_icode()` 解析 ELF、建立用户虚拟内存区域和页映射、复制段内容并清零 BSS、准备用户栈，最后设置用户入口地址、栈指针及返回状态。`kernel_execve()` 在装载成功后必须衔接已有 `forkrets → __trapret → sret` 路径，才能从过渡内核线程真正进入用户态。
+
+本模块依赖前置内存管理、调度与上下文恢复代码，并通过模块一接收用户态 exec、wait 请求；进程复制由模块三提供，退出与唤醒由模块四提供。`do_wait()` 与 `do_exit()` 共同完成回收：退出方解除地址空间引用、保存退出码并进入僵尸态，等待方读取退出码后移除管理关系，释放子进程内核栈和 PCB。已有 `proc_init()`、`copy_thread()` 作为前置代码复用，`do_fork()`、`copy_mm()` 不在本模块重复实现。
 
 **主要要求（spec）：**
 
+1. **进程初始化：** `alloc_proc()` 分配失败返回 `NULL`；成功时初始化全部字段，设置 `PROC_UNINIT`、未分配 PID、启动页表及空亲属关系。`kernel_thread()` 按 `kernel_thread_entry` 的约定传递函数和参数，构造返回内核态的现场，正确设置 SPP、SPIE、SIE，并传递创建失败的错误码。
+2. **启动与返回衔接：** `user_main()` 保留现有测试程序选择机制，`kernel_execve()` 成功后从新用户入口执行，不返回旧内核线程继续运行。使用当前 RV64/Sv39 的 `lsatp()` 和 TLB 刷新接口，不套用旧架构的页表装载方式；装载可执行代码后处理指令缓存同步。
+3. **ELF 与用户内存：** 访问 ELF 头和程序头前检查镜像边界，检查文件段、内存段、用户地址范围及加法溢出；建立匹配段属性的用户权限，准确复制文件内容并清零 BSS。用户栈按当前框架建立，保留栈底保护页，并保证入口和栈指针有效。
+4. **地址空间替换：** 在销毁旧地址空间前检查参数并保存后续仍需使用的数据；若镜像位于旧用户地址空间，必须确保拆除旧映射后仍有有效数据来源。先切换到启动页表，再按共享引用计数释放旧资源。新装载失败时完整回收部分分配的资源；旧映像已经销毁时，不能返回旧用户现场继续执行。
+5. **等待与回收：** `pid == 0` 等待任意子进程，正 PID 仅等待指定子进程，没有符合条件的子进程时返回 `-E_BAD_PROC`。验证非空退出码存储地址可写；存在未退出子进程时，在中断保护下设置睡眠与 `WT_CHILD`，防止遗漏唤醒；醒来后重新检查条件。僵尸子进程只回收一次，不在等待方重复释放已由退出方处理的地址空间。
+6. **验证边界：** 先进行模块二文件编译及接口核对，待模块三、四接入后验证首个用户程序、exec、等待退出及资源回收，结合已有评分检查记录真实结果。内存检查提示必须在相应断言通过后输出，不以打印成功信息替代验证。
+
+#### 最终提示词
+
+````markdown
+# 功能模块二：创建加载第一个用户进程提示词
+
+[PROMPT]
+
+**任务：**
+
+在当前 RISC-V ucore Lab5 工程的 `D:/OS_lab/OS_lab/code/kern/process/proc.c` 中，实现或更新 `init_main()`、`alloc_proc()`、`kernel_thread()`、`do_wait()`、`user_main()`、`kernel_execve()`、`do_execve()` 和 `load_icode()`，完成从内核线程到第一个用户程序的启动、装载、执行和等待链路。
+
+本轮同时允许在 `D:/OS_lab/OS_lab/code/kern/mm/pmm.c` 中修复本模块清理路径依赖的 `exit_range()`，仅调整中间页表回收逻辑及必要的内部辅助函数，保持公开接口不变。为完成 `init_main()` 的真实内存回收验证，还允许在 `D:/OS_lab/OS_lab/code/kern/mm/kmalloc.c` 和 `kmalloc.h` 中补齐存活分配量与 SLOB 持有页数统计及对应查询接口，不改变既有分配/释放语义。
+
+**操作要求：**
+
+明确执行本提示词时，必须修改实际文件。先核对工程现有定义，只在 `lab5 function2 YOUR CODE` 对应区域实现本模块，将对应的 `YOUR CODE` 替换为 `2412084`，保留 `lab5 function2` 及已有说明。允许在本文件增加必要的头文件、前置声明和 `static` 辅助函数，不重复定义已有接口。
+
+对于已填写的本模块代码，在原位置保留正确部分并修正；上述限定的 `exit_range()` 依赖修复不受补码区域限制，使用 `lab5 function2 2412084` 注释说明原因，不改动其他内存管理功能。
+
+`proc_init()`、`copy_thread()`、`proc_run()` 等已作为前置代码补齐，应核对并复用。`do_fork()`、`copy_mm()`、`dup_mmap()`、`copy_range()` 属于模块三；`do_exit()`、`do_yield()`、`do_kill()` 属于模块四，不在本任务实现或覆盖。不修改模块一、汇编入口、既有公共接口签名、Makefile 或现有测试；分配器统计所需的查询接口除外。不通过空函数绕过依赖缺失。
+
+**输出要求：**
+
+说明八个函数的实现位置、启动调用链、用户态返回路径、ELF 与栈布局、失败清理及 wait/exit 回收分工。明确列出其他模块需满足的接口约定。资源回收验证必须说明所依据的分配器统计真实语义，并考虑 SLOB 缓存页；不得以恒真指标或删除断言代替。区分静态检查、目标文件编译、完整链接和运行验证，未实际执行的测试不能写成通过。
+
+[RELY]
+
+## 1. 当前框架与接口
+
+先读取 `kern/process/proc.c`、`proc.h`、`entry.S`、`kern/trap/trapentry.S`、`trap.h`、`kern/mm/pmm.h`、`vmm.h`、`vmm.c`、`memlayout.h`、`kern/mm/kmalloc.h`、`kern/schedule/sched.c`、`libs/elf.h`、`riscv.h`、`error.h`，以及用户启动代码和 `tools/test_lab5.c`、`tools/grade.sh`。
+
+- `proc_struct` 包含状态、PID、运行次数、内核栈、调度标志、父进程、mm、context、tf、页表物理地址、flags、name、管理链表、exit_code、wait_state 及 cptr/yptr/optr。
+- `proc_list`、`hash_list`、`idleproc`、`initproc`、`current`、`nr_process` 已由框架管理。
+- 已有 `set_links()` / `remove_links()` 同时维护亲属关系、全局链表和进程计数，不要重复增减计数；`hash_proc()` / `unhash_proc()` 维护 PID 散列表。
+- 可复用 `set_proc_name()`、`find_proc()`、`setup_pgdir()`、`put_pgdir()`、`put_kstack()`、`wakeup_proc()`、`schedule()` 和中断保护接口。
+- `kmalloc()` / `kfree()` 管理 PCB 等内核对象；`kallocated()` 和 `nr_free_pages()` 必须按真实分配器实现核对后使用。当前 `slob_allocated()` 可能固定返回 0，SLOB 也可能长期保留已释放对象所在的 arena 页，不能把这些指标直接当作可靠的泄漏判据。
+
+## 2. 首次运行与异常返回约定
+
+`kernel_thread_entry` 从 s0 取得线程函数、从 s1 取得参数，调用函数并将返回值交给 `do_exit()`。
+
+已有 `copy_thread()` 在新线程内核栈中保存 trapframe，并把 context 设置为从 `forkret` 开始执行；`forkret → forkrets → __trapret` 最终执行 `RESTORE_ALL` 和 `sret`。
+
+`forkrets(struct trapframe *tf)` 将 sp 设置为传入的帧地址。当前 `RESTORE_ALL` 根据保存的 SPP 区分返回模式：用户态返回时设置后续 Trap 所需的内核栈指针，内核态返回时使 `sscratch` 为零。
+
+当前模块一只处理 `CAUSE_USER_ECALL`。不能直接在 S 模式执行 `ecall` 并假定它产生用户态系统调用，也不能为此修改模块一。`kernel_execve()` 可以在内核中调用 `do_execve()`，成功后明确通过 `forkrets(current->tf)` 进入已有返回路径；只有装载失败且旧执行环境仍有效时才返回错误。若采用其他桥接方式，必须说明与现有异常处理约定的兼容性。
+
+## 3. 用户程序来源
+
+现有 `KERNEL_EXECVE` / `KERNEL_EXECVE2` 宏使用链接器生成的用户镜像符号，程序格式为当前工程的 ELF64。保留这些宏的输出及符号约定。
+
+`user_main()` 支持 Makefile 提供的 `TEST`、`TESTSTART`、`TESTSIZE`，测试模式通过 `KERNEL_EXECVE2` 选择程序，普通模式默认使用 `KERNEL_EXECVE(hello)`。`_size` 链接符号表示大小值，应按现有宏转换，不能当作指向长度变量的地址去解引用。
+
+## 4. 地址空间与内存接口
+
+使用 `mm_create()`、`mm_map()`、`exit_mmap()`、`mm_destroy()`、`mm_count_inc/dec()`、`setup_pgdir()`、`put_pgdir()`、`pgdir_alloc_page()`、`page2kva()` 等真实接口。区分 VMA 元数据、页表页、数据页和 mm 引用计数的回收责任。
+
+`setup_pgdir()` 复制启动页表，保留内核映射。`current->pgdir` 存放页表物理地址；当前 `lsatp()` 已采用 RV64 Sv39 编码，切换后使用现有 TLB 刷新接口，不能使用旧的 Sv32 编码。写入可执行代码后，在进入用户态前执行必要的 `fence.i`。
+
+`USTACKTOP`、`USTACKSIZE`、`USTACKPAGE`、`PGSIZE`、`USER_ACCESS`、`PTE_U/R/W/X/V`、`VM_READ/WRITE/EXEC/STACK` 以当前头文件为准。`user_mem_check()` 对 `mm == NULL` 的情况使用内核地址范围检查；对用户栈写入会拒绝栈底保护页。
+
+`exit_mmap()` 要求 mm 引用计数为零，先撤销所有 VMA 的用户映射，再逐个范围回收中间页表；根页表及 mm 元数据仍需按已有接口清理。当前 `exit_range()` 对上级页表的释放判断存在缺陷，本轮须按下述补充规格修复，不得重复释放共享内核映射。其他框架缺陷单独报告。
+
+当前 `mm_map()` 仅用 `find_vma(mm, start)` 作部分重叠判断，插入时仍可能触发 `check_vma_overlap()` 断言。装载器不能依赖它拒绝所有损坏布局；应预检查各段的按页对齐区间及完整栈 VMA，避免把用户可控布局错误转成内核断言。`mm_map()` 还可能返回 `-E_NO_MEM`，不能把所有失败统一改写为 `-E_INVAL`。
+
+[GUARANTEE]
+
+实现以下接口，保持公开签名不变：
+
+```c
+static int init_main(void *arg);
+static struct proc_struct *alloc_proc(void);
+int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags);
+int do_wait(int pid, int *code_store);
+static int user_main(void *arg);
+static int kernel_execve(const char *name, unsigned char *binary, size_t size);
+int do_execve(const char *name, size_t len, unsigned char *binary, size_t size);
+static int load_icode(unsigned char *binary, size_t size);
+```
+
+交付代码应保证：PCB 初始状态完整；内核线程现场符合入口约定；成功装载后进入正确用户入口；失败路径不会使用已释放地址空间或泄漏部分分配资源；等待只回收符合条件的子进程一次。完整运行依赖模块三和模块四的实际实现，不以占位函数替代。
+
+[SPECIFICATION]
+
+## 1. alloc_proc 与 kernel_thread
+
+**Pre-Condition：** 内存分配及启动页表已初始化；线程入口和参数由内核提供。
+
+**Post-Condition：** `alloc_proc()` 失败返回 `NULL`；成功返回安全初始化的 PCB。`kernel_thread()` 返回新线程 PID 或原样传递负错误码。
+
+**Requirements：**
+
+- 初始化全部字段：状态 `PROC_UNINIT`、PID -1、运行次数 0、空 mm/tf/parent、启动页表物理地址、清零 context/name/flags/退出码/等待状态及亲属指针，链表节点处于明确的未挂接状态。
+- 临时 trapframe 先清零；s0 保存函数、s1 保存参数，epc 指向 `kernel_thread_entry`，SPP 置位、SPIE 置位、SIE 清零，不能在恢复现场过程中提前打开中断。
+- 调用 `do_fork(clone_flags | CLONE_VM, 0, &tf)`，由现有 `copy_thread()` 安置现场。不自行分配第二套内核栈或重复挂接进程。
+
+## 2. init_main 与 user_main
+
+**Pre-Condition：** `proc_init()` 已建立 idle/init，模块三支持内核线程创建。
+
+**Post-Condition：** 创建承载用户程序的过渡线程；init 等待并回收其子进程，直至没有可等待的子进程。
+
+**Requirements：**
+
+- 检查创建失败；保留测试宏选择与默认 hello 路径。成功的 `kernel_execve()` 不应返回旧 `user_main()`，意外返回应明确报告。
+- `init_main()` 使用 `do_wait(0, NULL)` 循环收束子进程，并对非预期错误作出明确处理。
+- 核对 `grade.sh` 的退出及内存检查输出要求；只有完成实际结构和资源检查后，才能输出 `all user-mode processes have quit.`、`init check memory pass.` 等成功信息。
+- 检查当前只剩 idle/init、init 无子进程，结合创建用户线程之前的资源基线验证回收。init 是收养孤儿的特殊进程，不能直接返回并经 `kernel_thread_entry` 退出；完成后保留在调度循环中。
+- 内存回收检查不得依赖恒真或受缓存影响的指标。先核对 `kmalloc.c` 中 `kallocated()` / `slob_allocated()` 的真实实现与 SLOB 的页持有语义：若 `slob_allocated()` 只是固定返回 0 的占位，应为分配器补充真实存活分配量（小对象 arena 存活单元与存活大块页）和 SLOB 持有页数统计，并提供查询接口；`init_main()` 保留子进程链表和进程数检查，使用真实存活量前后比较，并将空闲页减少量与 SLOB 持有页增加量核对，只有剩余差值才视为真实页泄漏。不能保留恒真比较、不能把 SLOB 缓存页造成的正常差异误报为泄漏，也不能删除断言后直接输出成功信息。
+
+## 3. kernel_execve 与 do_execve
+
+**Pre-Condition：** 当前进程及 tf 有效。启动时镜像来自内核嵌入符号；用户请求中的指针不可信。
+
+**Post-Condition：** 成功时当前进程使用新地址空间和用户现场；用户态 exec 经原 Trap 返回路径继续，内核启动 exec 明确进入 `forkrets`。失败时错误与清理行为一致。
+
+**Requirements：**
+
+- 检查名称长度、地址范围、镜像大小及加法溢出；在回收旧 mm 前，把进程名保存到已清零、可容纳终止符的内核缓冲区，再设置进程名，避免 `set_proc_name()` 固定长度读取越界。
+- 使用 `user_mem_check()` 等核对用户来源数据的读权限。内核启动路径必须兼容 `mm == NULL` 和嵌入镜像；不得无条件把合法内核地址当成非法用户地址。
+- 若镜像数据位于旧用户地址空间，在销毁旧映射前保存到可独立存活的内核缓冲区，检查分配失败并负责释放。不要将任意大小镜像直接交给有大小限制的 `kmalloc()`；必要时按实际接口分配连续物理页，记录页数以便回收。
+- 处理旧 mm 时，先切回 `boot_pgdir_pa` 并刷新 TLB，再减少 mm 引用计数；最后引用释放时依次清理映射、根页表和元数据。清除当前旧 mm 引用并设置一致的页表状态，再调用 `load_icode()`。
+- 参数检查失败且旧映像尚未拆除时返回负错误码。旧映像已拆除后若装载失败，清理资源并通过 `do_exit()` 终止当前进程，不能返回已失效的用户 epc。不在本模块实现 `do_exit()`。
+- 内核启动路径调用 `do_execve()` 成功后关闭中断，再通过真实有效的 `current->tf` 进入 `forkrets`；禁止仅返回 0 而继续执行旧内核线程。避免生成会与活动 C 栈相互覆盖的 trapframe。
+
+## 4. load_icode
+
+**Pre-Condition：** 旧 mm 已按约定解除，镜像缓冲区在整个装载期间可读且不会被清理；当前 tf 可用于构造新现场。
+
+**Post-Condition：** 成功返回 0，新 mm 引用计数、`current->mm`、`current->pgdir`、satp 和 tf 一致；失败返回负错误码并回收部分构造的全部资源。
+
+**Requirements：**
+
+- 在读取前验证 ELF 头大小、魔数、当前 RV64 支持的格式、程序头条目大小及表范围。使用减法边界检查等方式防止 `offset + size` 或表大小运算溢出。
+- 对每个可装载段检查 `p_filesz <= p_memsz`、文件范围、用户地址范围和入口有效性；处理零长度段，拒绝不支持的布局并完整清理，不静默加载损坏镜像。
+- 在建立任何段或栈 VMA 前完成布局预检查：计算所有非空 PT_LOAD 的按页对齐区间，按区间交叠规则检查任意两段，以及各段与完整用户栈 VMA 的冲突，不依赖程序头按虚拟地址排序。未实现合法同页共享合并时，明确拒绝同页相邻或重叠布局并返回 `-E_INVAL`，不得触发内核断言。检查范围和取整运算不溢出，不为预检查新增无上界的内核栈数组。
+- 对每处 `mm_map()` 调用保存其返回值，失败后按原值返回并执行清理；VMA 分配失败保留 `-E_NO_MEM`，布局错误保留 `-E_INVAL`。其他分配失败也不得被后续默认错误码覆盖。
+- 根据段属性建立 VMA 和 PTE 权限，包含 `PTE_U`，可写映射必须满足 Sv39 权限编码要求。按页处理未对齐段起点、首尾部分页与 BSS，分配后明确清零，准确复制文件字节，不让相邻段内容被错误清零覆盖。
+- 用物理页的内核映射写入代码和数据，不依赖尚未启用的新用户页表。对重叠段或同页相邻段，依据 `mm_map()` 真实约束正确处理或明确拒绝，不重复分配覆盖已加载页面。
+- 建立 `[USTACKTOP - USTACKSIZE, USTACKTOP)` 的栈 VMA，带 `VM_STACK`，栈底保护页不映射。当前没有按需缺页处理，不可把用户实际可用栈页的分配寄托于尚不存在的页故障逻辑；按本实验栈布局预先映射可用页并清零。
+- 构造用户 trapframe：通用寄存器清零，epc 为 ELF 入口，sp 为符合对齐要求的用户栈顶，SPP 清零、SPIE 置位、SIE 清零，保留内核访问用户内存所需的 SUM 等合理状态。不要把用户程序恢复为 S 模式。
+- 在所有构造步骤成功后再发布当前进程的新 mm 和用户现场，安装页表、刷新 TLB 并同步指令缓存。失败时按分配的逆序回收，区分 mm 引用、数据页、中间页表、根页表及 VMA 元数据。
+
+## 5. do_wait 与模块四的共同约定
+
+**Pre-Condition：** 当前进程有效，亲属关系由模块三正确建立；模块四按下面约定发布退出状态并唤醒等待者。
+
+**Post-Condition：** 成功返回 0，指定或任意一个僵尸子进程已回收，非空 `code_store` 获得退出码；不存在匹配子进程时返回 `-E_BAD_PROC`。
+
+**Case 1：已存在僵尸子进程。** 验证可写结果地址后读取退出码，移除 PID 散列、进程链表及亲属关系，回收内核栈和 PCB，避免重复增减 `nr_process`。
+
+**Case 2：存在匹配子进程但尚未退出。** 在中断保护下完成查找、设置 `PROC_SLEEPING` 和 `WT_CHILD`，进入调度；唤醒后重新扫描，不能假定唤醒必然意味着目标子进程已经退出。按既有临界区约定恢复中断。
+
+**Case 3：没有匹配子进程。** `pid == 0` 查找任意子进程，正 PID 查找指定且父进程为 current 的进程；负 PID、非子进程或不存在的 PID 返回 `-E_BAD_PROC`，不得等待无关进程。
+
+**Case 4：错误指针或等待期间被终止。** 非空退出码地址需检查 `sizeof(int)` 范围可写，非法时返回 `-E_INVAL`，不提前消费僵尸。允许 `NULL`。睡眠后重新检查 `PF_EXITING`，按框架约定调用 `do_exit(-E_KILLED)`。
+
+**回收责任约定：** `do_exit()` 解除 mm 引用、按引用计数释放地址空间、设置 exit_code 和 `PROC_ZOMBIE`，将孤儿交给 init，并唤醒等待相关子进程的父进程。它不能释放当前仍在使用的内核栈和 PCB。`do_wait()` 负责这些对象的最终回收，不再次释放退出方已处理的 mm。`wakeup_proc()` 已负责清除等待状态，复用其逻辑。
+
+## 6. exit_range 依赖修复
+
+**Pre-Condition：** 范围按页对齐且符合 USER_ACCESS；调用者已撤销相应数据页映射，或正在清理部分构造失败的用户页表。不存在并发页表修改。
+
+**Post-Condition：** 只回收能够确认完全为空的中间页表，不释放根页表、数据页、范围外仍在使用的下级表或共享内核映射；清除已释放表对应的父表项，重复清理安全。
+
+**Requirements：**
+
+- 对目标范围涉及的最低级页表，扫描全部 512 项确认无有效映射后才释放，并清空相应父表项。不能仅依据目标子区间没有映射就释放整个下级表。
+- 在考虑回收其上一级页表时，必须检查该表全部 512 个子项；只在所有有效子项均已清除后释放，并清空根页表中的对应项。范围外的子表即使自身为空，只要尚未回收，就必须保留其父表，不能丢失该子表的地址。
+- 无效子项表示不存在子表，不应直接把“上级表可以释放”的判断置为假。处理“仅分配了上级表，下级分配失败”的场景，避免部分构造失败后泄漏。
+- 复用现有物理地址转换和释放接口，区分叶子与非叶子；不将上层大页叶子当作页表解引用。不新增数据页回收逻辑，不绕过正常引用计数，不改变根页表由 `put_pgdir()` 回收的责任。
+
+
+
+````
 
 #### 实现迭代过程
 
-##### 第一次迭代：
+本模块已完成两次迭代：第一次修复 ELF 布局预检查、错误码传递及框架页表回收依赖三个问题；第二次修正 `init_main()` 的内存回收验证，为 SLOB 补上真实存活分配量与持有页统计。当前已通过静态复查及分文件编译，完整运行验证待模块三、四接入后进行。
+
+---
+
+##### 第一次迭代
 
 **遇到的问题：**
 
-
-**原因分析：**
-
+- **问题1：损坏 ELF 的重叠段可能触发内核断言。** `load_icode()` 直接把各段交给 `mm_map()`，但当前 `mm_map()` 只检查起始地址所在的 VMA，无法拒绝所有重叠布局。例如先插入高地址段，再插入从更低地址开始并覆盖前一段的区域，可能进入 `insert_vma_struct()` 的重叠断言。原提示词要求拒绝不支持的布局，却没有明确要求在调用框架接口前做完整的区间冲突检查。
+- **问题2：内存不足错误被改写为参数错误。** 段 VMA 和栈 VMA 的两处 `mm_map()` 调用失败后，代码统一设置 `ret = -E_INVAL`；该接口也可能因 VMA 分配失败返回 `-E_NO_MEM`，因此丢失了真实错误原因。该问题影响失败行为及排错，不能只检查能否退出清理路径。
+- **问题3：框架中间页表回收存在缺陷。** `load_icode()` 失败清理及 `do_execve()` 旧映像清理均依赖 `exit_mmap()` / `exit_range()`。原框架 `exit_range()` 只查看请求范围中的子项，却可能据此释放整个上级表，丢失范围外尚未回收的下级表；遇到无效子项时又将 `free_pd0` 置零，可能漏掉仅分配上级表而下级分配失败后的回收。这是原框架依赖问题，不是新装载逻辑自身引入，但会破坏本模块的失败清理保证。
 
 **问题解决策略：**
 
+- **针对问题1：** 在提示词中要求先验证全部非空 PT_LOAD 的按页对齐区间，再建立 VMA；检查任意两段之间及各段与完整栈 VMA 的冲突，不假定程序头按地址排序。未支持的同页或重叠布局返回 `-E_INVAL`，禁止交给内核断言处理。
+- **针对问题2：** 明确保存并传递每次 `mm_map()` 的原始返回值，布局错误保留 `-E_INVAL`，内存不足保留 `-E_NO_MEM`，并要求验证错误码与资源清理两方面。
+- **针对问题3：** 将本次必要依赖修复范围扩展到 `kern/mm/pmm.c` 中的 `exit_range()`。释放最低级表前确认其全部项为空；释放上级表前检查全部 512 个子项均已清除，不能仅根据本次请求范围判断。无效子项不阻止空表回收；释放后清空父项，保留范围外子表、共享内核映射及有效数据映射，根页表仍由 `put_pgdir()` 回收。
 
-**最终结果：**
+**本轮验证结果：**
 
+已根据修订提示词完成三个问题的修复。静态复查确认：`load_icode()` 在分配资源前检查全部可装载段的页对齐区间及完整栈区域，覆盖逆序重叠和包含关系；段与栈的两处 `mm_map()` 均保存并传递原始错误码；`exit_range()` 在释放下级表前扫描其全部表项，在释放上级表前扫描全部 512 个子项，保留范围外仍有效的子项，无效项不再阻止空表回收，释放后清空对应父表项。
 
+已使用现有 RISC-V GCC 工具链执行 `make -B -k obj/kern/process/proc.o obj/kern/mm/pmm.o`，两个目标均重新编译通过，未出现编译警告或错误。本轮针对上述三个问题的静态复查未发现新的明确问题。尚未执行损坏 ELF、内存分配失败注入或独立页表回收的运行测试，也未完成完整系统调用与用户程序运行验证；相关运行结果及资源计数检查待模块三、四接入后补充，不能将分文件编译通过等同于全部功能通过。
 
+##### 第二次迭代
+
+**遇到的问题：**
+
+`init_main()` 结束前的内存回收检查不可靠。`kern/mm/kmalloc.c` 中的 `slob_allocated()` 固定返回 0，`kallocated()` 只是转调它，因此 `kernel_allocated_store == kallocated()` 恒为 `0 == 0`，不能发现 kmalloc 对象泄漏。另一方面，SLOB 在 arena 空间不足时会从页分配器取得新页并长期保留，`slob_free()` 只做页内空闲块合并，不会把这些页归还页分配器；用户进程生命周期内只要触发过 arena 扩容，`nr_free_pages()` 就不会回到创建用户线程之前的基线。原来的“空闲页数必须完全相等”断言可能在没有任何泄漏时误报，不能通过删除断言后直接打印成功信息来规避。
+
+**问题解决策略：**
+
+给分配器补充两类真实统计：`slob_live_bytes` 统计小对象 arena 中存活单元及存活大块页的字节数，`slob_held_pages` 统计 arena 从页分配器取得且不归还的页数；`slob_allocated()` 返回真实存活量，并新增 `kmalloc_pages()` 暴露持有页数。`kmalloc()`/`kfree()` 的小对象路径、大块页路径及新页插入路径分别维护两个计数器，统计读取在关中断状态下完成。
+
+修改 `init_main()`：保留 `initproc->cptr == NULL` 和 `nr_process == 2` 检查；将存活量比较改为真实 `kallocated()` 的前后比较；页数检查改为“空闲页减少量必须等于 SLOB 持有页增加量”，剩余差值才视为真实页泄漏。这样既能识别 kmalloc 泄漏和页表/栈等页泄漏，也能容纳 SLOB 的合法缓存页。同时修正 `__slob_free_pages()` 调用 `kva2page()` 的参数类型，使分配器能够编译。
+
+**本轮验证结果：**
+
+已实现上述统计与检查。`make -B -k obj/kern/mm/kmalloc.o obj/kern/process/proc.o` 通过，无编译警告或错误。使用页分配器桩编译并执行真实 `kmalloc.c`：首次小对象分配使持有页从 0 增至 1，释放后存活量归零而持有页保持；300 次小对象分配/释放后存活量回到基线，`nr_free_pages()` 减少量与 `kmalloc_pages()` 增加量相等；8192 字节大块分配/释放后存活量归零、页数恢复；不释放小对象时 `kallocated()` 高于基线，直接泄漏一页时调整后的页等式不成立。
+
+---
 ## 五、测试与验证
 
 <!-- 根据该实验的具体情况，提供完整的测试运行截图，应包含：
@@ -605,7 +1126,8 @@ make -B -k \
 | `kern/process/switch.S` | 通过 | 上下文切换代码通过汇编。 |
 | `kern/schedule/sched.c` | 通过 | 调度代码未报告编译警告或错误。 |
 | `kern/process/proc.c` | 通过，存在警告 | `alloc_proc()`、`init_main()` 已声明并被使用，但尚未定义，属于 Lab5 功能模块二的待实现内容。 |
-| `kern/trap/trap.c` | 未通过 | `trap_dispatch()` 调用的 `exception_handler()` 尚未实现，触发隐式函数声明错误，属于 Lab5 功能模块
+| `kern/trap/trap.c` | 未通过 | `trap_dispatch()` 调用的 `exception_handler()` 尚未实现，触发隐式函数声明错误，属于 Lab5 功能模块一的待实现内容。 |
+
 
 **结果确认方法：** 对照终端中的 `+ cc` 编译记录及后续诊断信息，确认上述七个目标均被实际尝试重新编译；根据警告和错误所指向的函数，核对其所属实验模块。五个独立文件无诊断，`proc.c` 仅出现两个待实现函数的警告，`trap.c` 的阻塞点为缺失的 `exception_handler()`。不将单文件编译或汇编通过等同于功能测试通过。
 
@@ -617,6 +1139,67 @@ make -B -k \
 ---
 
 
+
+### 5.2 模块一：系统调用编译、静态及反汇编检查
+
+**负责人：** 2412084-刘芳希
+
+**测试目的：** 检查异常处理、系统调用分发、页表查看和用户态封装能够生成目标文件；通过代码与反汇编检查，核对调用号、参数、返回值和页表诊断逻辑。该阶段不替代真实用户态系统调用测试。
+
+**执行方法：** 在 WSL 的工程代码目录配置工具链，强制重新编译相关文件，并反汇编用户库目标文件：
+
+```bash
+cd /mnt/d/OS_lab/OS_lab/code
+export PATH=/home/user/compiler-lab/riscv-elf-toolchains/bin:$PATH
+
+make -B -k \
+  obj/kern/trap/trap.o \
+  obj/kern/syscall/syscall.o \
+  obj/kern/mm/pmm.o \
+  obj/user/libs/syscall.o
+
+riscv64-unknown-elf-objdump -d obj/user/libs/syscall.o
+```
+
+结合源码检查 `epc += 4`、完整宽度的调用号边界判断、分发表空槽处理、参数转换、负返回值扩展、活动页表遍历和异常大页对齐判断。
+
+**实际结果：** 编译通过，无编译警告或错误；静态检查通过。完整运行验证待后续联合测试。
+
+**测试截图：**
+
+![模块一测试截图](images/lab5-module1-compile.png)
+
+---
+
+### 5.3 模块二：用户进程加载与回收代码检查
+
+**负责人：** 2412084-刘芳希
+
+**测试目的：** 检查进程初始化、内核线程到用户进程的入口衔接、ELF 装载、等待回收及其页表清理依赖，核对 ELF 冲突、错误码覆盖和中间页表回收问题的修复情况。同时检查分配器真实存活量、SLOB 持有页数统计及 `init_main()` 内存回收检查的衔接。
+
+**执行方法：** 使用已有工具链重新编译模块二及其修改的内存管理依赖：
+
+```bash
+cd /mnt/d/OS_lab/OS_lab/code
+export PATH=/home/user/compiler-lab/riscv-elf-toolchains/bin:$PATH
+
+make -B -k \
+  obj/kern/process/proc.o \
+  obj/kern/mm/pmm.o \
+  obj/kern/mm/kmalloc.o
+```
+
+静态检查 `kernel_execve → do_execve → load_icode` 与成功后的 `forkrets → __trapret → sret` 衔接，检查 ELF 预检查、两处 `mm_map()` 的返回值传递及 `exit_range()` 的完整子表扫描。核对 `do_wait()` 与模块四约定的退出码、睡眠唤醒及最终回收责任。
+
+检查小对象与大块分配、释放时的存活量增减是否配对，arena 扩容是否正确累计持有页数，以及统计读取的中断保护。核对 `init_main()` 保留子进程链表和进程数检查，并比较真实存活量的前后值，确认空闲页减少量与 SLOB 持有页增加量相等。
+
+**实际结果：** `proc.c`、`pmm.c` 和新增内存统计所在的 `kmalloc.c` 均重新编译通过，无编译警告或错误。ELF 布局、错误码传递、页表回收、分配器统计及 `init_main()` 内存回收检查的静态检查通过。完整运行验证待后续联合测试。
+
+**测试截图：**
+
+![模块二测试截图](images/lab5-module2-compile-2.png)
+
+---
 
 ## 六、实验总结与收获
 

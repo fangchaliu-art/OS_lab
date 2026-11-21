@@ -408,56 +408,72 @@ void unmap_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
     } while (start != 0 && start < end);
 }
 
+//lab5 function2 2412084
+// exit_range - reclaim empty intermediate page tables covering [start, end).
+// The old version decided whether to free a 1 GiB-level directory from the
+// VMA sub-range alone and treated an absent 2 MiB entry as a veto.  Both
+// could free a directory that still had children or leak tables after a
+// partial construction failure.  The whole child table is scanned now.
 void exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
 {
     assert(start % PGSIZE == 0 && end % PGSIZE == 0);
     assert(USER_ACCESS(start, end));
 
     uintptr_t d1start, d0start;
-    int free_pt, free_pd0;
     pde_t *pd0, *pt, pde1, pde0;
+    int i, free_pt, free_pd0;
+
     d1start = ROUNDDOWN(start, PDSIZE);
     d0start = ROUNDDOWN(start, PTSIZE);
     do
     {
-        // level 1 page directory entry
         pde1 = pgdir[PDX1(d1start)];
-        // if there is a valid entry, get into level 0
-        // and try to free all page tables pointed to by
-        // all valid entries in level 0 page directory,
-        // then try to free this level 0 page directory
-        // and update level 1 entry
-        if (pde1 & PTE_V)
+        /* Only a valid non-leaf entry points to a page directory; a 1 GiB
+         * leaf is a data mapping and must not be dereferenced or freed. */
+        if ((pde1 & PTE_V) && (pde1 & (PTE_R | PTE_W | PTE_X)) == 0)
         {
             pd0 = page2kva(pde2page(pde1));
-            // try to free all page tables
-            free_pd0 = 1;
-            do
+            if (d0start < d1start)
+            {
+                d0start = d1start;
+            }
+            for (; d0start < d1start + PDSIZE && d0start < end; d0start += PTSIZE)
             {
                 pde0 = pd0[PDX0(d0start)];
-                if (pde0 & PTE_V)
+                /* Only a valid non-leaf entry points to a page table. */
+                if ((pde0 & PTE_V) && (pde0 & (PTE_R | PTE_W | PTE_X)) == 0)
                 {
                     pt = page2kva(pde2page(pde0));
-                    // try to free page table
                     free_pt = 1;
-                    for (int i = 0; i < NPTEENTRY; i++)
+                    for (i = 0; i < NPTEENTRY; i++)
+                    {
                         if (pt[i] & PTE_V)
                         {
                             free_pt = 0;
                             break;
                         }
-                    // free it only when all entry are already invalid
+                    }
                     if (free_pt)
                     {
                         free_page(pde2page(pde0));
                         pd0[PDX0(d0start)] = 0;
                     }
                 }
-                else
+            }
+
+            /* Free the 1 GiB directory only when every one of its 512
+             * children is gone.  An invalid child simply has no table and
+             * must not veto the decision; a valid child (including a leaf)
+             * keeps the directory alive. */
+            free_pd0 = 1;
+            for (i = 0; i < NPTEENTRY; i++)
+            {
+                if (pd0[i] & PTE_V)
+                {
                     free_pd0 = 0;
-                d0start += PTSIZE;
-            } while (d0start != 0 && d0start < d1start + PDSIZE && d0start < end);
-            // free level 0 page directory only when all pde0s in it are already invalid
+                    break;
+                }
+            }
             if (free_pd0)
             {
                 free_page(pde2page(pde1));
@@ -471,6 +487,127 @@ void exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
 
 
 //lab5 function3 YOUR CODE 
+
+//lab5 function1 2412084
+// print_pgdir - walk the active Sv39 page table and print its mappings
+static uintptr_t
+pgdir_sign_extend(uintptr_t va)
+{
+    /* Sv39 canonical form: sign-extend bit 38 into the upper bits. */
+    return (uintptr_t)(((intptr_t)(va << (64 - 39))) >> (64 - 39));
+}
+
+static const char *
+pgdir_perm_str(pte_t pte)
+{
+    static char str[5];
+    str[0] = (pte & PTE_U) ? 'u' : '-';
+    str[1] = (pte & PTE_R) ? 'r' : '-';
+    str[2] = (pte & PTE_W) ? 'w' : '-';
+    str[3] = (pte & PTE_X) ? 'x' : '-';
+    str[4] = '\0';
+    return str;
+}
+
+static void
+pgdir_print_table(pte_t *table, int level, uintptr_t base)
+{
+    int i;
+    for (i = 0; i < NPTEENTRY; i++)
+    {
+        pte_t pte = table[i];
+        uintptr_t va;
+        uintptr_t pa;
+        uintptr_t size;
+
+        if (!(pte & PTE_V))
+        {
+            continue;
+        }
+
+        va = base + ((uintptr_t)i << (PGSHIFT + level * 9));
+        if (level == 2)
+        {
+            va = pgdir_sign_extend(va);
+        }
+
+        /* A leaf has at least one of R/W/X set; otherwise this entry points
+         * to the next level table and must not be treated as a data page. */
+        if (pte & (PTE_R | PTE_W | PTE_X))
+        {
+            size = (uintptr_t)1 << (PGSHIFT + level * 9);
+            pa = PTE_ADDR(pte);
+            /* A mapping must be aligned to the page size of its level:
+             * 1 GiB for level 2, 2 MiB for level 1, 4 KiB for level 0. */
+            if ((pa & (size - 1)) != 0)
+            {
+                cprintf("  invalid %s leaf alignment at VA 0x%016lx: "
+                        "pa 0x%016lx (need 0x%lx)\n",
+                        level == 2 ? "1GiB" : level == 1 ? "2MiB" : "4KiB",
+                        (unsigned long)va, (unsigned long)pa,
+                        (unsigned long)size);
+                continue;
+            }
+            if ((pte & PTE_W) && !(pte & PTE_R))
+            {
+                cprintf("  [reserved W-only leaf] ");
+            }
+            cprintf("%-4s VA 0x%016lx-0x%016lx -> PA 0x%016lx %s\n",
+                    level == 2 ? "1GiB" : level == 1 ? "2MiB" : "4KiB",
+                    (unsigned long)va, (unsigned long)(va + size - 1),
+                    (unsigned long)pa, pgdir_perm_str(pte));
+            continue;
+        }
+
+        if (level == 0)
+        {
+            cprintf("  invalid non-leaf entry at VA 0x%016lx\n",
+                    (unsigned long)va);
+            continue;
+        }
+
+        pa = PTE_ADDR(pte);
+        if ((pa & (PGSIZE - 1)) != 0 || PPN(pa) < nbase || PPN(pa) >= npage)
+        {
+            cprintf("  invalid page table pa 0x%016lx at VA 0x%016lx\n",
+                    (unsigned long)pa, (unsigned long)va);
+            continue;
+        }
+        pgdir_print_table((pte_t *)KADDR(pa), level - 1, va);
+    }
+}
+
+void print_pgdir(void)
+{
+    uintptr_t satp = read_csr(satp);
+    uintptr_t mode = satp & SATP64_MODE;
+    uintptr_t root_pa;
+
+    cprintf("-------------------- BEGIN --------------------\n");
+
+    if (mode != ((uintptr_t)SATP_MODE_SV39 << 60))
+    {
+        cprintf("print_pgdir: unsupported satp mode 0x%lx\n",
+                (unsigned long)(mode >> 60));
+    }
+    else
+    {
+        root_pa = (satp & SATP64_PPN) << PGSHIFT;
+        if ((root_pa & (PGSIZE - 1)) != 0 ||
+            PPN(root_pa) < nbase || PPN(root_pa) >= npage)
+        {
+            cprintf("print_pgdir: invalid root page table pa 0x%lx\n",
+                    (unsigned long)root_pa);
+        }
+        else
+        {
+            cprintf("satp: mode=Sv39 root pa 0x%lx\n", (unsigned long)root_pa);
+            pgdir_print_table((pte_t *)KADDR(root_pa), 2, 0);
+        }
+    }
+
+    cprintf("--------------------- END ---------------------\n");
+}
 
 
 //lab4 请补充你在lab4中的代码

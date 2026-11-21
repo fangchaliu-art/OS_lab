@@ -77,6 +77,13 @@ static slob_t arena = {.next = &arena, .units = 1};
 static slob_t *slobfree = &arena;
 static bigblock_t *bigblocks;
 
+/* lab5 function2 2412084: real allocator accounting for the init check.
+ * slob_live_bytes counts live small-object arena units plus live big-block
+ * page bytes; slob_held_pages counts pages the small-object arena has taken
+ * from the page allocator and never returns. */
+static size_t slob_live_bytes;
+static size_t slob_held_pages;
+
 static void *__slob_get_free_pages(gfp_t gfp, int order)
 {
 	struct Page *page = alloc_pages(1 << order);
@@ -87,7 +94,7 @@ static void *__slob_get_free_pages(gfp_t gfp, int order)
 
 #define __slob_get_free_page(gfp) __slob_get_free_pages(gfp, 0)
 
-static inline void __slob_free_pages(unsigned long kva, int order)
+static inline void __slob_free_pages(void *kva, int order)
 {
 	free_pages(kva2page(kva), 1 << order);
 }
@@ -134,6 +141,7 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align)
 			}
 
 			slobfree = prev;
+			slob_live_bytes += (size_t)units * SLOB_UNIT;
 			spin_unlock_irqrestore(&slob_lock, flags);
 			return cur;
 		}
@@ -147,6 +155,10 @@ static void *slob_alloc(size_t size, gfp_t gfp, int align)
 			cur = (slob_t *)__slob_get_free_page(gfp);
 			if (!cur)
 				return 0;
+
+			spin_lock_irqsave(&slob_lock, flags);
+			slob_held_pages++;
+			spin_unlock_irqrestore(&slob_lock, flags);
 
 			slob_free(cur, PAGE_SIZE);
 			spin_lock_irqsave(&slob_lock, flags);
@@ -168,6 +180,12 @@ static void slob_free(void *block, int size)
 
 	/* Find reinsertion point */
 	spin_lock_irqsave(&slob_lock, flags);
+
+	/* A PAGE_SIZE block is a fresh arena page being inserted, not a
+	 * previously counted live allocation. */
+	if (size != PAGE_SIZE)
+		slob_live_bytes -= (size_t)b->units * SLOB_UNIT;
+
 	for (cur = slobfree; !(b > cur && b < cur->next); cur = cur->next)
 		if (cur >= cur->next && (b > cur || b < cur->next))
 			break;
@@ -208,7 +226,28 @@ kmalloc_init(void)
 size_t
 slob_allocated(void)
 {
-	return 0;
+	bool intr_flag;
+	size_t ret;
+
+	local_intr_save(intr_flag);
+	ret = slob_live_bytes;
+	local_intr_restore(intr_flag);
+	return ret;
+}
+
+/* Pages the small-object arena has taken from the page allocator and keeps
+ * for reuse.  They explain why nr_free_pages() may not return to its old
+ * value even when every kmalloc object has been freed. */
+size_t
+kmalloc_pages(void)
+{
+	bool intr_flag;
+	size_t ret;
+
+	local_intr_save(intr_flag);
+	ret = slob_held_pages;
+	local_intr_restore(intr_flag);
+	return ret;
 }
 
 size_t
@@ -249,6 +288,7 @@ static void *__kmalloc(size_t size, gfp_t gfp)
 		spin_lock_irqsave(&block_lock, flags);
 		bb->next = bigblocks;
 		bigblocks = bb;
+		slob_live_bytes += (size_t)PAGE_SIZE << bb->order;
 		spin_unlock_irqrestore(&block_lock, flags);
 		return bb->pages;
 	}
@@ -280,8 +320,9 @@ void kfree(void *block)
 			if (bb->pages == block)
 			{
 				*last = bb->next;
+				slob_live_bytes -= (size_t)PAGE_SIZE << bb->order;
 				spin_unlock_irqrestore(&block_lock, flags);
-				__slob_free_pages((unsigned long)block, bb->order);
+				__slob_free_pages(block, bb->order);
 				slob_free(bb, sizeof(bigblock_t));
 				return;
 			}

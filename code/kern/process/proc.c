@@ -88,6 +88,7 @@ static struct proc_struct *alloc_proc(void);
 static int init_main(void *arg);
 static void copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf);
 static void forkret(void);
+static int user_main(void *arg);
 
 // copy_thread - build the first trapframe of a new thread on its kernel stack
 static void
@@ -188,7 +189,34 @@ void cpu_idle(void)
     }
 }
 
-//lab5 function2 YOUR CODE update alloc_proc
+//lab5 function2 2412084 update alloc_proc
+// alloc_proc - allocate a PCB and initialize every field
+static struct proc_struct *
+alloc_proc(void)
+{
+    struct proc_struct *proc = kmalloc(sizeof(struct proc_struct));
+    if (proc != NULL)
+    {
+        proc->state = PROC_UNINIT;
+        proc->pid = -1;
+        proc->runs = 0;
+        proc->kstack = 0;
+        proc->need_resched = 0;
+        proc->parent = NULL;
+        proc->mm = NULL;
+        memset(&(proc->context), 0, sizeof(struct context));
+        proc->tf = NULL;
+        proc->pgdir = boot_pgdir_pa;
+        proc->flags = 0;
+        memset(proc->name, 0, PROC_NAME_LEN + 1);
+        proc->exit_code = 0;
+        proc->wait_state = 0;
+        proc->cptr = proc->optr = proc->yptr = NULL;
+        list_init(&(proc->list_link));
+        list_init(&(proc->hash_link));
+    }
+    return proc;
+}
 
 
 // set_proc_name - set the name of proc
@@ -332,7 +360,20 @@ find_proc(int pid)
     return NULL;
 }
 
-//lab5 function2 YOUR CODE update kernel_thread
+//lab5 function2 2412084 update kernel_thread
+// kernel_thread - create a kernel thread whose entry is fn(arg)
+int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags)
+{
+    struct trapframe tf;
+
+    memset(&tf, 0, sizeof(struct trapframe));
+    tf.gpr.s0 = (uintptr_t)fn;
+    tf.gpr.s1 = (uintptr_t)arg;
+    tf.status = (read_csr(sstatus) | SSTATUS_SPP | SSTATUS_SPIE) & ~SSTATUS_SIE;
+    tf.epc = (uintptr_t)kernel_thread_entry;
+
+    return do_fork(clone_flags | CLONE_VM, 0, &tf);
+}
 
 
 // setup_kstack - alloc pages with size KSTACKPAGE as process kernel stack
@@ -382,7 +423,484 @@ put_pgdir(struct mm_struct *mm)
 
 
 
-//lab5 function2 YOUR CODE
+//lab5 function2 2412084
+/* Validate one PT_LOAD segment and return its page-aligned interval.
+ * Returns 1 for a valid non-empty segment, 0 for "skip" (not PT_LOAD or
+ * zero memsz), -1 for an invalid segment.  All range arithmetic is done
+ * after bounding p_va/p_memsz inside the user address space. */
+static int
+elf_load_range(const struct proghdr *ph, size_t size,
+               uintptr_t *start, uintptr_t *end)
+{
+    if (ph->p_type != ELF_PT_LOAD)
+    {
+        return 0;
+    }
+    if (ph->p_filesz > ph->p_memsz)
+    {
+        return -1;
+    }
+    if (ph->p_memsz == 0)
+    {
+        return 0;
+    }
+    if (ph->p_offset > size || ph->p_filesz > size - ph->p_offset)
+    {
+        return -1;
+    }
+    if (ph->p_va < USERBASE || ph->p_va >= USERTOP ||
+        ph->p_memsz > USERTOP - ph->p_va)
+    {
+        return -1;
+    }
+    *start = ROUNDDOWN(ph->p_va, PGSIZE);
+    *end = ROUNDUP(ph->p_va + ph->p_memsz, PGSIZE);
+    return 1;
+}
+
+// load_icode - build a new user address space from an ELF64 image
+static int
+load_icode(unsigned char *binary, size_t size)
+{
+    struct mm_struct *mm;
+    struct Page *page;
+    struct elfhdr *elf;
+    struct proghdr *ph, *ph_end, *ph1, *ph2;
+    struct trapframe *tf;
+    uintptr_t stack_bottom;
+    int ret = -E_NO_MEM;
+    bool entry_in_exec = 0;
+
+    if (current->mm != NULL || current->tf == NULL || binary == NULL)
+    {
+        return -E_INVAL;
+    }
+    if (size < sizeof(struct elfhdr))
+    {
+        return -E_INVAL;
+    }
+
+    elf = (struct elfhdr *)binary;
+    if (elf->e_magic != ELF_MAGIC || elf->e_elf[0] != 2 /* ELFCLASS64 */ ||
+        elf->e_elf[1] != 1 /* ELFDATA2LSB */ || elf->e_machine != 243 /* EM_RISCV */)
+    {
+        return -E_INVAL;
+    }
+    if (elf->e_phnum == 0 || elf->e_phentsize != sizeof(struct proghdr) ||
+        (elf->e_phoff & 7) != 0 || elf->e_phoff > size ||
+        elf->e_phnum > (size - elf->e_phoff) / sizeof(struct proghdr))
+    {
+        return -E_INVAL;
+    }
+    if (!USER_ACCESS(elf->e_entry, elf->e_entry + 1))
+    {
+        return -E_INVAL;
+    }
+
+    ph = (struct proghdr *)(binary + elf->e_phoff);
+    ph_end = ph + elf->e_phnum;
+    stack_bottom = USTACKTOP - USTACKSIZE;
+
+    /* Layout pre-check before allocating anything: mm_map() only detects an
+     * overlap when the new start lies inside an existing VMA, so an
+     * out-of-order overlapping image could otherwise trigger
+     * check_vma_overlap()'s assertion.  Compare every page-aligned segment
+     * interval with all later segments and with the whole stack VMA. */
+    for (ph1 = ph; ph1 < ph_end; ph1++)
+    {
+        uintptr_t s1, e1;
+        int r1 = elf_load_range(ph1, size, &s1, &e1);
+        if (r1 < 0)
+        {
+            return -E_INVAL;
+        }
+        if (r1 == 0)
+        {
+            continue;
+        }
+        if (s1 < USTACKTOP && stack_bottom < e1)
+        {
+            return -E_INVAL;
+        }
+        for (ph2 = ph1 + 1; ph2 < ph_end; ph2++)
+        {
+            uintptr_t s2, e2;
+            int r2 = elf_load_range(ph2, size, &s2, &e2);
+            if (r2 < 0)
+            {
+                return -E_INVAL;
+            }
+            if (r2 == 1 && s1 < e2 && s2 < e1)
+            {
+                return -E_INVAL;
+            }
+        }
+    }
+
+    if ((mm = mm_create()) == NULL)
+    {
+        goto bad_mm;
+    }
+    if (setup_pgdir(mm) != 0)
+    {
+        goto bad_pgdir_cleanup_mm;
+    }
+
+    ph = (struct proghdr *)(binary + elf->e_phoff);
+    for (; ph < ph_end; ph++)
+    {
+        uint32_t vm_flags = 0;
+        uint32_t perm = PTE_U;
+        uintptr_t seg_start, seg_end, file_end, addr;
+        int r = elf_load_range(ph, size, &seg_start, &seg_end);
+
+        if (r < 0)
+        {
+            ret = -E_INVAL;
+            goto bad_cleanup_mmap;
+        }
+        if (r == 0)
+        {
+            continue;
+        }
+
+        if (ph->p_flags & ELF_PF_R)
+        {
+            vm_flags |= VM_READ;
+            perm |= PTE_R;
+        }
+        if (ph->p_flags & ELF_PF_W)
+        {
+            /* Sv39 forbids W without R */
+            vm_flags |= VM_WRITE | VM_READ;
+            perm |= PTE_W | PTE_R;
+        }
+        if (ph->p_flags & ELF_PF_X)
+        {
+            vm_flags |= VM_EXEC;
+            perm |= PTE_X;
+        }
+        if (vm_flags == 0)
+        {
+            ret = -E_INVAL;
+            goto bad_cleanup_mmap;
+        }
+
+        ret = mm_map(mm, ph->p_va, ph->p_memsz, vm_flags, NULL);
+        if (ret != 0)
+        {
+            goto bad_cleanup_mmap;
+        }
+
+        file_end = ph->p_va + ph->p_filesz;
+        for (addr = seg_start; addr < seg_end; addr += PGSIZE)
+        {
+            uintptr_t copy_begin, copy_end;
+            char *kva;
+
+            if ((page = pgdir_alloc_page(mm->pgdir, addr, perm)) == NULL)
+            {
+                ret = -E_NO_MEM;
+                goto bad_cleanup_mmap;
+            }
+            kva = page2kva(page);
+            memset(kva, 0, PGSIZE);
+
+            copy_begin = addr > ph->p_va ? addr : ph->p_va;
+            copy_end = addr + PGSIZE;
+            if (copy_end > file_end)
+            {
+                copy_end = file_end;
+            }
+            if (copy_begin < copy_end)
+            {
+                memcpy(kva + (copy_begin - addr),
+                       binary + ph->p_offset + (copy_begin - ph->p_va),
+                       copy_end - copy_begin);
+            }
+        }
+
+        if ((ph->p_flags & ELF_PF_X) && elf->e_entry >= ph->p_va &&
+            elf->e_entry - ph->p_va < ph->p_memsz)
+        {
+            entry_in_exec = 1;
+        }
+    }
+
+    if (!entry_in_exec)
+    {
+        ret = -E_INVAL;
+        goto bad_cleanup_mmap;
+    }
+
+    /* user stack: the VMA covers the full range, the bottom guard page is
+     * left unmapped because there is no demand paging.  stack_bottom was
+     * computed before the layout pre-check. */
+    ret = mm_map(mm, stack_bottom, USTACKSIZE, VM_READ | VM_WRITE | VM_STACK, NULL);
+    if (ret != 0)
+    {
+        goto bad_cleanup_mmap;
+    }
+    for (uintptr_t addr = stack_bottom + PGSIZE; addr < USTACKTOP; addr += PGSIZE)
+    {
+        if ((page = pgdir_alloc_page(mm->pgdir, addr, PTE_U | PTE_W | PTE_R)) == NULL)
+        {
+            ret = -E_NO_MEM;
+            goto bad_cleanup_mmap;
+        }
+        memset(page2kva(page), 0, PGSIZE);
+    }
+
+    /* construct the user return frame in place: U mode, interrupts enabled
+     * again by sret, kernel SUM preserved. */
+    tf = current->tf;
+    memset(tf, 0, sizeof(struct trapframe));
+    tf->epc = elf->e_entry;
+    tf->gpr.sp = USTACKTOP;
+    tf->status = (read_csr(sstatus) & SSTATUS_SUM) | SSTATUS_SPIE;
+
+    /* publish only after everything succeeded */
+    mm_count_inc(mm);
+    current->mm = mm;
+    current->pgdir = PADDR(mm->pgdir);
+    lsatp(current->pgdir);
+    flush_tlb();
+    asm volatile("fence.i" ::: "memory");
+    return 0;
+
+bad_cleanup_mmap:
+    exit_mmap(mm);
+bad_elf_cleanup_pgdir:
+    put_pgdir(mm);
+bad_pgdir_cleanup_mm:
+    mm_destroy(mm);
+bad_mm:
+    return ret;
+}
+
+// do_execve - replace the current process image with the given ELF image
+int do_execve(const char *name, size_t len, unsigned char *binary, size_t size)
+{
+    struct mm_struct *mm = current->mm;
+    struct Page *image_pages = NULL;
+    size_t image_npages = 0, name_len;
+    unsigned char *image = binary;
+    bool copied = 0;
+    char local_name[PROC_NAME_LEN + 1];
+    int ret;
+
+    if (name == NULL || binary == NULL || size == 0)
+    {
+        return -E_INVAL;
+    }
+    if (len > 0 && ((uintptr_t)name > (uintptr_t)-1 - len ||
+                    !user_mem_check(mm, (uintptr_t)name, len, 0)))
+    {
+        return -E_INVAL;
+    }
+    if ((uintptr_t)binary > (uintptr_t)-1 - size ||
+        !user_mem_check(mm, (uintptr_t)binary, size, 0))
+    {
+        return -E_INVAL;
+    }
+
+    /* save the name in kernel memory before the old mm is torn down */
+    name_len = len < PROC_NAME_LEN ? len : PROC_NAME_LEN;
+    memset(local_name, 0, sizeof(local_name));
+    memcpy(local_name, name, name_len);
+
+    /* if the image lives in the old user address space, move it out first */
+    if (mm != NULL)
+    {
+        image_npages = ROUNDUP(size, PGSIZE) / PGSIZE;
+        if ((image_pages = alloc_pages(image_npages)) == NULL)
+        {
+            return -E_NO_MEM;
+        }
+        if (!copy_from_user(mm, page2kva(image_pages), binary, size, 0))
+        {
+            free_pages(image_pages, image_npages);
+            return -E_INVAL;
+        }
+        image = (unsigned char *)page2kva(image_pages);
+        copied = 1;
+    }
+
+    bool old_mm_removed = (mm != NULL);
+    if (mm != NULL)
+    {
+        /* leave the old address space before releasing its page table */
+        lsatp(boot_pgdir_pa);
+        flush_tlb();
+        current->pgdir = boot_pgdir_pa;
+        if (mm_count_dec(mm) == 0)
+        {
+            exit_mmap(mm);
+            put_pgdir(mm);
+            mm_destroy(mm);
+        }
+        current->mm = NULL;
+    }
+
+    ret = load_icode(image, size);
+    if (copied)
+    {
+        free_pages(image_pages, image_npages);
+    }
+    if (ret != 0)
+    {
+        if (old_mm_removed)
+        {
+            /* the old user image is gone; cannot return to its epc */
+            do_exit(ret);
+            panic("do_execve: load_icode failed");
+        }
+        return ret;
+    }
+    set_proc_name(current, local_name);
+    return 0;
+}
+
+// kernel_execve - exec from kernel context, then enter user mode directly
+static int
+kernel_execve(const char *name, unsigned char *binary, size_t size)
+{
+    int ret = do_execve(name, strlen(name), binary, size);
+    if (ret == 0)
+    {
+        /* no trap may intervene between the new state and forkrets */
+        intr_disable();
+        forkrets(current->tf);
+        panic("kernel_execve: forkrets returned");
+    }
+    return ret;
+}
+
+// do_wait - wait for one of the current process's children to become a zombie
+int do_wait(int pid, int *code_store)
+{
+    struct proc_struct *proc;
+    bool intr_flag, haskid;
+
+    if (code_store != NULL &&
+        !user_mem_check(current->mm, (uintptr_t)code_store, sizeof(int), 1))
+    {
+        return -E_INVAL;
+    }
+    if (pid < 0)
+    {
+        return -E_BAD_PROC;
+    }
+
+repeat_find:
+    haskid = 0;
+    proc = NULL;
+    if (pid != 0)
+    {
+        proc = find_proc(pid);
+        if (proc != NULL && proc->parent == current)
+        {
+            haskid = 1;
+            if (proc->state == PROC_ZOMBIE)
+            {
+                goto found;
+            }
+        }
+    }
+    else
+    {
+        for (proc = current->cptr; proc != NULL; proc = proc->optr)
+        {
+            haskid = 1;
+            if (proc->state == PROC_ZOMBIE)
+            {
+                goto found;
+            }
+        }
+    }
+
+    if (!haskid)
+    {
+        return -E_BAD_PROC;
+    }
+
+    /* sleep until a child changes state, then scan again */
+    local_intr_save(intr_flag);
+    {
+        current->state = PROC_SLEEPING;
+        current->wait_state = WT_CHILD;
+        schedule();
+        if (current->flags & PF_EXITING)
+        {
+            do_exit(-E_KILLED);
+        }
+    }
+    local_intr_restore(intr_flag);
+    goto repeat_find;
+
+found:
+    local_intr_save(intr_flag);
+    {
+        unhash_proc(proc);
+        remove_links(proc);
+    }
+    local_intr_restore(intr_flag);
+
+    if (code_store != NULL)
+    {
+        *code_store = proc->exit_code;
+    }
+    put_kstack(proc);
+    kfree(proc);
+    return 0;
+}
+
+// init_main - create the first user process and reap all its descendants
+static int
+init_main(void *arg)
+{
+    size_t nr_free_pages_store = nr_free_pages();
+    size_t kernel_allocated_store = kallocated();
+    size_t kernel_pages_store = kmalloc_pages();
+
+    int pid = kernel_thread(user_main, arg, 0);
+    if (pid <= 0)
+    {
+        panic("create user_main failed.\n");
+    }
+
+    while (1)
+    {
+        int ret = do_wait(0, NULL);
+        if (ret == -E_BAD_PROC)
+        {
+            break;
+        }
+        if (ret != 0)
+        {
+            panic("init_main: do_wait failed: %d", ret);
+        }
+    }
+
+    cprintf("all user-mode processes have quit.\n");
+    assert(initproc->cptr == NULL);
+    assert(nr_process == 2);
+    assert(kernel_allocated_store == kallocated());
+    /* SLOB may keep released small-object pages in its arena.  The page
+     * allocator difference must be fully explained by growth of that
+     * retained set; any remaining difference is a real page leak. */
+    assert((intptr_t)nr_free_pages_store - (intptr_t)nr_free_pages() ==
+           (intptr_t)kmalloc_pages() - (intptr_t)kernel_pages_store);
+    cprintf("init check memory pass.\n");
+
+    /* init adopts orphans, so it must not return through
+     * kernel_thread_entry's do_exit; keep it in the scheduling loop. */
+    while (1)
+    {
+        schedule();
+    }
+    return 0;
+}
 
 
 //lab5 function3 YOUR CODE
@@ -412,7 +930,21 @@ put_pgdir(struct mm_struct *mm)
 #define KERNEL_EXECVE2(x, xstart, xsize) __KERNEL_EXECVE2(x, xstart, xsize)
 
 
-//lab5 function2 YOUR CODE
+//lab5 function2 2412084
+// user_main - kernel thread that loads and enters the first user program
+static int
+user_main(void *arg)
+{
+    int ret;
+
+    (void)arg;
+#ifdef TEST
+    ret = KERNEL_EXECVE2(TEST, TESTSTART, TESTSIZE);
+#else
+    ret = KERNEL_EXECVE(hello);
+#endif
+    panic("user_main: kernel_execve failed: %d", ret);
+}
 
 
 
