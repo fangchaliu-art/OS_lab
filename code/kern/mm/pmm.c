@@ -1,5 +1,4 @@
 #include <default_pmm.h>
-#include <best_fit_pmm.h>
 #include <defs.h>
 #include <error.h>
 #include <kmalloc.h>
@@ -7,12 +6,12 @@
 #include <mmu.h>
 #include <pmm.h>
 #include <sbi.h>
+#include <dtb.h>
 #include <stdio.h>
 #include <string.h>
 #include <sync.h>
 #include <vmm.h>
 #include <riscv.h>
-#include <dtb.h>
 
 // virtual address of physical page array
 struct Page *pages;
@@ -38,7 +37,7 @@ static void check_boot_pgdir(void);
 // init_pmm_manager - initialize a pmm_manager instance
 static void init_pmm_manager(void)
 {
-    pmm_manager = &best_fit_pmm_manager;
+    pmm_manager = &default_pmm_manager;
     cprintf("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
@@ -89,116 +88,136 @@ size_t nr_free_pages(void)
 }
 
 //lab2 请补充你在lab2中的代码
-/* Bounds derived from the fixed boot mapping.  They are defined locally so
- * that this file works whether or not memlayout.h provides them. */
-#ifndef KERNEL_BEGIN_PADDR
-#define KERNEL_BEGIN_PADDR  (KERNBASE - PHYSICAL_MEMORY_OFFSET)
-#endif
+//lab2 function1 2412084
+/* This tree's memlayout.h does not define PHYSICAL_MEMORY_END, so derive the
+ * same upper bound of the managed physical memory from the fixed boot
+ * mapping: KERNTOP is the virtual address of physical address 0x88000000. */
 #ifndef PHYSICAL_MEMORY_END
-#define PHYSICAL_MEMORY_END (KERNTOP - PHYSICAL_MEMORY_OFFSET)
+#define PHYSICAL_MEMORY_END ((uintptr_t)(KERNTOP - PHYSICAL_MEMORY_OFFSET))
 #endif
 
-static void page_init(void) {
-    extern char end[];  // virtual address just past the kernel image
+/* page_init - detect physical memory from the device tree and initialize the
+ * page descriptor array.
+ *
+ * Physical layout after this function returns (all boundaries page aligned):
+ *
+ *   DRAM_BASE      kernel image end      free_start_pa             mem_end
+ *   | OpenSBI ...  | kernel | Page array |     free pages        |
+ *   |<------------------- reserved ----->|<--- init_memmap ----->|
+ *
+ * pages[0] describes physical page nbase = DRAM_BASE / PGSIZE, so the
+ * descriptor array holds npage - nbase entries; that is not the number of
+ * free pages.  Every page starts reserved and only the pages handed to
+ * init_memmap stop being reserved.
+ */
+static void page_init(void)
+{
+    /* virtual address of the first byte after the kernel image */
+    extern char end[];
 
     uint64_t mem_base = get_memory_base();
     uint64_t mem_size = get_memory_size();
-    uint64_t probe_end;       // end of the range reported by the DTB
-    uintptr_t mem_end;        // page-aligned end of the managed range
-    uintptr_t kernel_end_pa;  // physical address of the kernel end
-    uintptr_t pages_pa;       // physical address of the descriptor array
-    uintptr_t free_start_pa;  // first complete free page
-    size_t nr_descs;          // number of descriptors = npage - nbase
-    size_t desc_size;         // bytes occupied by the descriptor array
-    size_t free_page_count;   // number of complete free pages
-    size_t i;
+    uint64_t probe_end, mem_end;
+    uintptr_t kernel_end_pa, pages_pa, free_start_pa;
+    size_t nr_descs, desc_size, nr_free_cnt, i;
 
-    /* The boot page table maps [DRAM_BASE, DRAM_BASE + 1GiB) with this fixed
-     * offset; it is not derived from the memory base reported by the DTB. */
+    /* The boot page table maps physical memory at DRAM_BASE with this fixed
+     * virtual/physical offset. */
     va_pa_offset = PHYSICAL_MEMORY_OFFSET;
 
-    /* Validate the DTB information before any address arithmetic or access. */
-    if (mem_base == 0 || mem_size == 0) {
+    /* Validate the information reported by the device tree before doing any
+     * address arithmetic or dereferencing memory. */
+    if (mem_base == 0 || mem_size == 0)
+    {
         panic("page_init: invalid memory info (base=0x%016lx, size=0x%016lx)",
               (unsigned long)mem_base, (unsigned long)mem_size);
     }
-    if (mem_base < DRAM_BASE) {
-        panic("page_init: memory base 0x%016lx is below DRAM_BASE 0x%016lx",
+    /* nbase and page2pa/pa2page are anchored at DRAM_BASE, so any other base
+     * would make the page number conversion inconsistent with the mapping. */
+    if (mem_base != DRAM_BASE)
+    {
+        panic("page_init: memory base 0x%016lx incompatible with DRAM_BASE 0x%016lx",
               (unsigned long)mem_base, (unsigned long)DRAM_BASE);
     }
-    if (mem_size > ~(uint64_t)0 - mem_base) {
+    if (mem_size > ~(uint64_t)0 - mem_base)
+    {
         panic("page_init: memory range overflow (base=0x%016lx, size=0x%016lx)",
               (unsigned long)mem_base, (unsigned long)mem_size);
     }
     probe_end = mem_base + mem_size;
 
-    /* The kernel image must start inside the reported memory. */
-    if (mem_base > (uint64_t)KERNEL_BEGIN_PADDR) {
-        panic("page_init: memory base 0x%016lx is above kernel image 0x%016lx",
-              (unsigned long)mem_base, (unsigned long)KERNEL_BEGIN_PADDR);
-    }
-
-    /* Never manage memory above the fixed upper bound; the managed end is
-     * rounded down so that only complete pages are included. */
-    mem_end = (uintptr_t)probe_end;
-    if (mem_end > (uintptr_t)PHYSICAL_MEMORY_END) {
-        mem_end = (uintptr_t)PHYSICAL_MEMORY_END;
+    /* Never manage memory above the fixed upper bound, and only keep complete
+     * pages: the managed end is rounded down to a page boundary. */
+    mem_end = probe_end;
+    if (mem_end > PHYSICAL_MEMORY_END)
+    {
+        mem_end = PHYSICAL_MEMORY_END;
     }
     mem_end = ROUNDDOWN(mem_end, PGSIZE);
-    if (mem_end <= (uintptr_t)mem_base) {
+    if (mem_end <= mem_base)
+    {
         panic("page_init: no usable physical memory in [0x%016lx, 0x%016lx)",
               (unsigned long)mem_base, (unsigned long)probe_end);
     }
 
-    /* npage is the upper bound of physical page numbers, not the number of
-     * free pages.  pages[0] still describes PPN nbase. */
+    /* npage is the upper bound of physical page numbers, not a free count. */
     npage = PPN(mem_end);
-    if (npage <= nbase) {
+    if (npage <= nbase)
+    {
         panic("page_init: npage %lu is not above nbase %lu",
               (unsigned long)npage, (unsigned long)nbase);
     }
 
-    /* The kernel must end below the managed end, otherwise the descriptor
-     * array placed after it cannot fit in valid memory. */
-    kernel_end_pa = PADDR((uintptr_t)end);
-    if (kernel_end_pa >= mem_end) {
-        panic("page_init: kernel end 0x%016lx is not below managed end 0x%016lx",
-              (unsigned long)kernel_end_pa, (unsigned long)mem_end);
-    }
-
     /* Place the descriptor array on the first page after the kernel image. */
     pages = (struct Page *)ROUNDUP((uintptr_t)end, PGSIZE);
+    kernel_end_pa = PADDR((uintptr_t)end);
     pages_pa = PADDR((uintptr_t)pages);
 
-    /* Check that the whole array fits below the managed end before writing. */
+    /* The kernel image must already lie inside the managed range, otherwise
+     * the descriptor array cannot be placed consistently with the mapping. */
+    if (kernel_end_pa < mem_base || kernel_end_pa > mem_end)
+    {
+        panic("page_init: kernel end pa 0x%016lx outside managed [0x%016lx, 0x%016lx)",
+              (unsigned long)kernel_end_pa, (unsigned long)mem_base,
+              (unsigned long)mem_end);
+    }
+
+    /* Check that the whole descriptor array fits in the managed range before
+     * writing to it. */
     nr_descs = npage - nbase;
-    if (nr_descs > ~(size_t)0 / sizeof(struct Page)) {
+    if (nr_descs > ~(size_t)0 / sizeof(struct Page))
+    {
         panic("page_init: descriptor size overflow (count=%lu)",
               (unsigned long)nr_descs);
     }
     desc_size = nr_descs * sizeof(struct Page);
-    if (desc_size > mem_end || pages_pa > mem_end - desc_size) {
-        panic("page_init: page descriptors [0x%016lx, +0x%lx) do not fit below 0x%016lx",
+    if (pages_pa < mem_base || pages_pa > mem_end || desc_size > mem_end - pages_pa)
+    {
+        panic("page_init: page descriptors [0x%016lx, +0x%lx) do not fit in [0x%016lx, 0x%016lx)",
               (unsigned long)pages_pa, (unsigned long)desc_size,
-              (unsigned long)mem_end);
+              (unsigned long)mem_base, (unsigned long)mem_end);
     }
 
-    /* Descriptor memory is not guaranteed to be zero: clear it explicitly.
-     * Every page starts reserved and is only released through init_memmap. */
+    /* Descriptor memory is not guaranteed to be zeroed, so initialize it
+     * explicitly.  Every described page starts reserved; init_memmap is the
+     * only place that releases pages to the allocator. */
     memset(pages, 0, desc_size);
-    for (i = 0; i < nr_descs; i++) {
+    for (i = 0; i < nr_descs; i++)
+    {
         SetPageReserved(&pages[i]);
     }
 
-    /* First complete page after the kernel image and descriptor array. */
+    /* First complete free page after the kernel image and descriptor array.
+     * pages_pa + desc_size <= mem_end was checked above, so this rounding
+     * cannot overflow or pass the managed end (which is page aligned). */
     free_start_pa = (uintptr_t)ROUNDUP(pages_pa + desc_size, PGSIZE);
-    if (free_start_pa < (uintptr_t)ROUNDUP(mem_base, PGSIZE)) {
-        free_start_pa = (uintptr_t)ROUNDUP(mem_base, PGSIZE);
+    if (free_start_pa < mem_end)
+    {
+        nr_free_cnt = (size_t)((mem_end - free_start_pa) / PGSIZE);
     }
-    if (free_start_pa < mem_end) {
-        free_page_count = (size_t)((mem_end - free_start_pa) / PGSIZE);
-    } else {
-        free_page_count = 0;
+    else
+    {
+        nr_free_cnt = 0;
     }
 
     cprintf("physical memory detected: [0x%016lx, 0x%016lx)\n",
@@ -210,20 +229,16 @@ static void page_init(void) {
             (unsigned long)DRAM_BASE, (unsigned long)free_start_pa);
     cprintf("free:     [0x%016lx, 0x%016lx), %lu pages\n",
             (unsigned long)free_start_pa, (unsigned long)mem_end,
-            (unsigned long)free_page_count);
-    cprintf("pages: 0x%016lx (physical 0x%016lx), %lu descriptors, kernel end 0x%016lx\n",
+            (unsigned long)nr_free_cnt);
+    cprintf("pages: 0x%016lx (physical 0x%016lx), %lu descriptors\n",
             (unsigned long)(uintptr_t)pages, (unsigned long)pages_pa,
-            (unsigned long)nr_descs, (unsigned long)kernel_end_pa);
+            (unsigned long)nr_descs);
 
-    /* Only complete pages are registered; an empty range is Case 3. */
-    if (free_page_count > 0) {
-        init_memmap(&pages[PPN(free_start_pa) - nbase], free_page_count);
+    /* Register the free block only when at least one complete page exists. */
+    if (nr_free_cnt > 0)
+    {
+        init_memmap(&pages[PPN(free_start_pa) - nbase], nr_free_cnt);
     }
-}
-
-static void enable_paging(void)
-{
-    write_csr(satp, 0x8000000000000000 | (boot_pgdir_pa >> RISCV_PGSHIFT));
 }
 
 // boot_map_segment - setup&enable the paging mechanism
@@ -283,6 +298,7 @@ void pmm_init(void)
     // use pmm->check to verify the correctness of the alloc/free function in a
     // pmm
     check_alloc_page();
+
     // create boot_pgdir, an initial page directory(Page Directory Table, PDT)
     extern char boot_page_table_sv39[];
     boot_pgdir_va = (pte_t *)boot_page_table_sv39;
@@ -306,7 +322,6 @@ void pmm_init(void)
 //  la:     the linear address need to map
 //  create: a logical value to decide if alloc a page for PT
 // return vaule: the kernel virtual address of this pte
-//给定根页表和虚拟地址，返回该地址所在虚拟页对应的最底层页表项地址；必要时创建中间页表。
 pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create)
 {
     pde_t *pdep1 = &pgdir[PDX1(la)];
@@ -322,7 +337,8 @@ pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create)
         memset(KADDR(pa), 0, PGSIZE);
         *pdep1 = pte_create(page2ppn(page), PTE_U | PTE_V);
     }
-    pde_t *pdep0 = &((pte_t *)KADDR(PDE_ADDR(*pdep1)))[PDX0(la)];
+
+    pde_t *pdep0 = &((pde_t *)KADDR(PDE_ADDR(*pdep1)))[PDX0(la)];
     if (!(*pdep0 & PTE_V))
     {
         struct Page *page;
@@ -353,19 +369,16 @@ struct Page *get_page(pde_t *pgdir, uintptr_t la, pte_t **ptep_store)
     return NULL;
 }
 
-//LAB4 function1 2412084
-
-// page_remove - free a page according to the la and its record in pgdir
-// parameter:
-//  pgdir:  the kernel virtual base address of PDT
-//  la:     the linear address need to be unmapped
-void page_remove(pde_t *pgdir, uintptr_t la)
+// page_remove_pte - free an Page sturct which is related linear address la
+//                - and clean(invalidate) pte which is related linear address la
+// note: PT is changed, so the TLB need to be invalidate
+static inline void page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep)
 {
-    pte_t *ptep = get_pte(pgdir, la, 0);
-    if (ptep != NULL && (*ptep & PTE_V))
+    if (*ptep & PTE_V)
     {
         struct Page *page = pte2page(*ptep);
-        if (page_ref_dec(page) == 0)
+        page_ref_dec(page);
+        if (page_ref(page) == 0)
         {
             free_page(page);
         }
@@ -374,53 +387,125 @@ void page_remove(pde_t *pgdir, uintptr_t la)
     }
 }
 
-// page_insert - build the map of phy addr of an Page with the linear addr la
-// parameter:
-//  pgdir:  the kernel virtual base address of PDT
-//  page:   the Page which need to map
-//  la:     the linear address need to map
-//  perm:   the permission of this Page which is setted in related pte
-// return value: 0 on success, -E_NO_MEM if the page table entry cannot be
-//               obtained
-//在 pgdir 对应的页表中，让 la 所在的虚拟页映射到 page，并设置权限
-int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
+void unmap_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
 {
-    pte_t *ptep = get_pte(pgdir, la, 1);
-    if (ptep == NULL)
+    assert(start % PGSIZE == 0 && end % PGSIZE == 0);
+    assert(USER_ACCESS(start, end));
+
+    do
     {
-        return -E_NO_MEM;
-    }
-    page_ref_inc(page);
-    if (*ptep & PTE_V)
+        pte_t *ptep = get_pte(pgdir, start, 0);
+        if (ptep == NULL)
+        {
+            start = ROUNDDOWN(start + PTSIZE, PTSIZE);
+            continue;
+        }
+        if (*ptep != 0)
+        {
+            page_remove_pte(pgdir, start, ptep);
+        }
+        start += PGSIZE;
+    } while (start != 0 && start < end);
+}
+
+void exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
+{
+    assert(start % PGSIZE == 0 && end % PGSIZE == 0);
+    assert(USER_ACCESS(start, end));
+
+    uintptr_t d1start, d0start;
+    int free_pt, free_pd0;
+    pde_t *pd0, *pt, pde1, pde0;
+    d1start = ROUNDDOWN(start, PDSIZE);
+    d0start = ROUNDDOWN(start, PTSIZE);
+    do
     {
-        struct Page *p = pte2page(*ptep);
-        if (p == page)
+        // level 1 page directory entry
+        pde1 = pgdir[PDX1(d1start)];
+        // if there is a valid entry, get into level 0
+        // and try to free all page tables pointed to by
+        // all valid entries in level 0 page directory,
+        // then try to free this level 0 page directory
+        // and update level 1 entry
+        if (pde1 & PTE_V)
         {
-            page_ref_dec(page);
+            pd0 = page2kva(pde2page(pde1));
+            // try to free all page tables
+            free_pd0 = 1;
+            do
+            {
+                pde0 = pd0[PDX0(d0start)];
+                if (pde0 & PTE_V)
+                {
+                    pt = page2kva(pde2page(pde0));
+                    // try to free page table
+                    free_pt = 1;
+                    for (int i = 0; i < NPTEENTRY; i++)
+                        if (pt[i] & PTE_V)
+                        {
+                            free_pt = 0;
+                            break;
+                        }
+                    // free it only when all entry are already invalid
+                    if (free_pt)
+                    {
+                        free_page(pde2page(pde0));
+                        pd0[PDX0(d0start)] = 0;
+                    }
+                }
+                else
+                    free_pd0 = 0;
+                d0start += PTSIZE;
+            } while (d0start != 0 && d0start < d1start + PDSIZE && d0start < end);
+            // free level 0 page directory only when all pde0s in it are already invalid
+            if (free_pd0)
+            {
+                free_page(pde2page(pde1));
+                pgdir[PDX1(d1start)] = 0;
+            }
         }
-        else
-        {
-            page_remove(pgdir, la);
-        }
-    }
-    *ptep = pte_create(page2ppn(page), perm);
-    tlb_invalidate(pgdir, la);
-    return 0;
+        d1start += PDSIZE;
+        d0start = d1start;
+    } while (d1start != 0 && d1start < end);
 }
 
 
+//lab5 function3 YOUR CODE 
 
 
-
+//lab4 请补充你在lab4中的代码
 
 
 // invalidate a TLB entry, but only if the page tables being
 // edited are the ones currently in use by the processor.
 void tlb_invalidate(pde_t *pgdir, uintptr_t la)
 {
-    // flush_tlb();
-    // The flush_tlb flush the entire TLB, is there any better way?
     asm volatile("sfence.vma %0" : : "r"(la));
+}
+
+// pgdir_alloc_page - call alloc_page & page_insert functions to
+//                  - allocate a page size memory & setup an addr map
+//                  - pa<->la with linear address la and the PDT pgdir
+struct Page *pgdir_alloc_page(pde_t *pgdir, uintptr_t la, uint32_t perm)
+{
+    struct Page *page = alloc_page();
+    if (page != NULL)
+    {
+        if (page_insert(pgdir, page, la, perm) != 0)
+        {
+            free_page(page);
+            return NULL;
+        }
+        // swap_map_swappable(check_mm_struct, la, page, 0);
+        page->pra_vaddr = la;
+        assert(page_ref(page) == 1);
+        // cprintf("get No. %d  page: pra_vaddr %x, pra_link.prev %x,
+        // pra_link_next %x in pgdir_alloc_page\n", (page-pages),
+        // page->pra_vaddr,page->pra_page_link.prev,
+        // page->pra_page_link.next);
+    }
+
+    return page;
 }
 
 static void check_alloc_page(void)
