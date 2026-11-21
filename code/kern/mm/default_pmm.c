@@ -4,6 +4,157 @@
 #include <default_pmm.h>
 
 //lab2 请补充你在lab2中的代码
+//lab2 function2-1 2412084
+free_area_t free_area;
+
+#define free_list (free_area.free_list)
+#define nr_free (free_area.nr_free)
+
+static void default_check(void);
+
+/* Return the list position before which a block starting at base must be
+ * inserted to keep the free list ordered by physical address.  When base is
+ * above every existing block this is the list head, i.e. insertion happens
+ * at the tail. */
+static list_entry_t *
+default_free_list_pos(struct Page *base)
+{
+    list_entry_t *le = &free_list;
+    while ((le = list_next(le)) != &free_list)
+    {
+        if (base < le2page(le, page_link))
+        {
+            break;
+        }
+    }
+    return le;
+}
+
+static void
+default_init(void)
+{
+    list_init(&free_list);
+    nr_free = 0;
+}
+
+static void
+default_init_memmap(struct Page *base, size_t n)
+{
+    assert(n > 0);
+    struct Page *p = base;
+    for (; p != base + n; p++)
+    {
+        assert(PageReserved(p));
+        p->flags = 0;
+        p->property = 0;
+        set_page_ref(p, 0);
+    }
+    base->property = n;
+    SetPageProperty(base);
+    nr_free += n;
+    list_add_before(default_free_list_pos(base), &(base->page_link));
+}
+
+static struct Page *
+default_alloc_pages(size_t n)
+{
+    assert(n > 0);
+    if (n > nr_free)
+    {
+        return NULL;
+    }
+
+    struct Page *page = NULL;
+    list_entry_t *le = &free_list;
+    while ((le = list_next(le)) != &free_list)
+    {
+        struct Page *p = le2page(le, page_link);
+        if (p->property >= n)
+        {
+            page = p;
+            break;
+        }
+    }
+    if (page == NULL)
+    {
+        return NULL;
+    }
+
+    list_entry_t *prev = list_prev(&(page->page_link));
+    list_del(&(page->page_link));
+    if (page->property > n)
+    {
+        struct Page *rest = page + n;
+        rest->property = page->property - n;
+        SetPageProperty(rest);
+        list_add_after(prev, &(rest->page_link));
+    }
+    nr_free -= n;
+    ClearPageProperty(page);
+    return page;
+}
+
+static void
+default_free_pages(struct Page *base, size_t n)
+{
+    assert(n > 0);
+    struct Page *p = base;
+    for (; p != base + n; p++)
+    {
+        assert(!PageReserved(p) && !PageProperty(p));
+        p->flags = 0;
+        p->property = 0;
+        set_page_ref(p, 0);
+    }
+    base->property = n;
+    SetPageProperty(base);
+    nr_free += n;
+
+    list_add_before(default_free_list_pos(base), &(base->page_link));
+
+    /* Merge with the physically preceding block, if it is adjacent. */
+    list_entry_t *le = list_prev(&(base->page_link));
+    if (le != &free_list)
+    {
+        p = le2page(le, page_link);
+        if (p + p->property == base)
+        {
+            p->property += base->property;
+            ClearPageProperty(base);
+            list_del(&(base->page_link));
+            base = p;
+        }
+    }
+
+    /* Merge with the physically following block, if it is adjacent. */
+    le = list_next(&(base->page_link));
+    if (le != &free_list)
+    {
+        p = le2page(le, page_link);
+        if (base + base->property == p)
+        {
+            base->property += p->property;
+            ClearPageProperty(p);
+            list_del(&(p->page_link));
+        }
+    }
+}
+
+static size_t
+default_nr_free_pages(void)
+{
+    return nr_free;
+}
+
+const struct pmm_manager default_pmm_manager = {
+    .name = "default_pmm_manager",
+    .init = default_init,
+    .init_memmap = default_init_memmap,
+    .alloc_pages = default_alloc_pages,
+    .free_pages = default_free_pages,
+    .nr_free_pages = default_nr_free_pages,
+    .check = default_check,
+};
 
 static void
 basic_check(void)

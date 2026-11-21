@@ -96,6 +96,74 @@ void print_regs(struct pushregs *gpr)
 extern struct mm_struct *check_mm_struct;
 
 //lab3 请补充你在lab3中的代码
+//lab3 function2 2412084
+void interrupt_handler(struct trapframe *tf)
+{
+    /* scause: the highest bit is the interrupt flag, the low bits are the
+     * cause code.  Mask with the width of uintptr_t, not with an int. */
+    uintptr_t cause = tf->cause & ~((uintptr_t)1 << (sizeof(uintptr_t) * 8 - 1));
+
+    switch (cause)
+    {
+    case IRQ_U_SOFT:
+        cprintf("User software interrupt\n");
+        break;
+    case IRQ_S_SOFT:
+        cprintf("Supervisor software interrupt\n");
+        break;
+    case IRQ_H_SOFT:
+        cprintf("Hypervisor software interrupt\n");
+        break;
+    case IRQ_M_SOFT:
+        cprintf("Machine software interrupt\n");
+        break;
+    case IRQ_U_TIMER:
+        cprintf("User timer interrupt\n");
+        break;
+    case IRQ_S_TIMER:
+        /* Every supervisor timer interrupt must arm the next event, not
+         * only the periodic ones. */
+        clock_set_next_event();
+        ticks++;
+        if (ticks % TICK_NUM == 0)
+        {
+            print_ticks();
+            if (current != NULL)
+            {
+                current->need_resched = 1;
+            }
+        }
+        break;
+    case IRQ_H_TIMER:
+        cprintf("Hypervisor timer interrupt\n");
+        break;
+    case IRQ_M_TIMER:
+        cprintf("Machine timer interrupt\n");
+        break;
+    case IRQ_U_EXT:
+        cprintf("User external interrupt\n");
+        break;
+    case IRQ_S_EXT:
+        cprintf("Supervisor external interrupt\n");
+        break;
+    case IRQ_H_EXT:
+        cprintf("Hypervisor external interrupt\n");
+        break;
+    case IRQ_M_EXT:
+        cprintf("Machine external interrupt\n");
+        break;
+    case IRQ_COP:
+        cprintf("Coprocessor interrupt\n");
+        break;
+    case IRQ_HOST:
+        cprintf("Host interrupt\n");
+        break;
+    default:
+        cprintf("Unknown interrupt: cause %lu\n", (unsigned long)cause);
+        print_trapframe(tf);
+        break;
+    }
+}
 
 //lab5 function1 YOUR CODE update exception_handler
 

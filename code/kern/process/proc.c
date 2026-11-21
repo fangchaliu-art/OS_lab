@@ -83,6 +83,110 @@ void forkrets(struct trapframe *tf);
 void switch_to(struct context *from, struct context *to);
 
 //lab4 请补充你在lab4中的代码
+//lab4 function2 2412084
+static struct proc_struct *alloc_proc(void);
+static int init_main(void *arg);
+static void copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf);
+static void forkret(void);
+
+// copy_thread - build the first trapframe of a new thread on its kernel stack
+static void
+copy_thread(struct proc_struct *proc, uintptr_t esp, struct trapframe *tf)
+{
+    proc->tf = (struct trapframe *)(proc->kstack + KSTACKSIZE) - 1;
+    *(proc->tf) = *tf;
+
+    /* a new thread returns 0 from fork */
+    proc->tf->gpr.a0 = 0;
+
+    if (esp == 0)
+    {
+        /* kernel thread: start with sp just below its trapframe */
+        proc->tf->gpr.sp = (uintptr_t)proc->tf;
+    }
+    else
+    {
+        proc->tf->gpr.sp = esp;
+    }
+
+    /* first scheduling enters forkret -> forkrets(current->tf) -> __trapret */
+    proc->context.ra = (uintptr_t)forkret;
+    proc->context.sp = (uintptr_t)proc->tf;
+}
+
+// proc_init - set up the first kernel thread idleproc and create initproc
+void proc_init(void)
+{
+    int i;
+    list_init(&proc_list);
+    for (i = 0; i < HASH_LIST_SIZE; i++)
+    {
+        list_init(hash_list + i);
+    }
+
+    if ((idleproc = alloc_proc()) == NULL)
+    {
+        panic("cannot alloc idleproc.\n");
+    }
+
+    idleproc->pid = 0;
+    idleproc->state = PROC_RUNNABLE;
+    idleproc->kstack = (uintptr_t)bootstack;
+    idleproc->need_resched = 1;
+    set_proc_name(idleproc, "idle");
+    nr_process++;
+
+    current = idleproc;
+
+    int pid = kernel_thread(init_main, "Hello world!!", 0);
+    if (pid <= 0)
+    {
+        panic("create init_main failed.\n");
+    }
+
+    initproc = find_proc(pid);
+    if (initproc == NULL)
+    {
+        panic("cannot find initproc.\n");
+    }
+    set_proc_name(initproc, "init");
+
+    assert(idleproc != NULL && idleproc->pid == 0);
+    assert(initproc != NULL && initproc->pid == 1);
+}
+
+//lab4 function3 2412084
+// proc_run - switch the CPU to proc, loading its page table first
+void proc_run(struct proc_struct *proc)
+{
+    if (proc == current)
+    {
+        return;
+    }
+
+    bool intr_flag;
+    struct proc_struct *prev = current, *next = proc;
+    local_intr_save(intr_flag);
+    {
+        current = proc;
+        lsatp(proc->pgdir);
+        flush_tlb();
+        switch_to(&(prev->context), &(next->context));
+    }
+    local_intr_restore(intr_flag);
+}
+
+// cpu_idle - the idle thread: schedule whenever a request is pending
+void cpu_idle(void)
+{
+    while (1)
+    {
+        if (current->need_resched)
+        {
+            schedule();
+        }
+    }
+}
 
 //lab5 function2 YOUR CODE update alloc_proc
 

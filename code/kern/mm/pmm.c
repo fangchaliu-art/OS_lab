@@ -474,6 +474,51 @@ void exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
 
 
 //lab4 请补充你在lab4中的代码
+//lab4 function1 2412084
+// page_insert - map the virtual page containing la to the physical page page
+//               and set the permission bits requested by perm.
+// return value: 0 on success, -E_NO_MEM when get_pte cannot provide the pte.
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
+{
+    pte_t *ptep = get_pte(pgdir, la, 1);
+    if (ptep == NULL)
+    {
+        return -E_NO_MEM;
+    }
+
+    page_ref_inc(page);
+    if (*ptep & PTE_V)
+    {
+        struct Page *p = pte2page(*ptep);
+        if (p == page)
+        {
+            /* Remapping the same page only updates permissions: undo the
+             * temporary reference so the page is not freed below. */
+            page_ref_dec(page);
+        }
+        else
+        {
+            /* Drop the old mapping; page_remove_pte handles the old page's
+             * reference count, possible free, pte clearing and TLB flush. */
+            page_remove_pte(pgdir, la, ptep);
+        }
+    }
+
+    /* pte_create() sets PTE_V itself; store a physical page number. */
+    *ptep = pte_create(page2ppn(page), perm);
+    tlb_invalidate(pgdir, la);
+    return 0;
+}
+
+// page_remove - remove the mapping of the virtual page containing la
+void page_remove(pde_t *pgdir, uintptr_t la)
+{
+    pte_t *ptep = get_pte(pgdir, la, 0);
+    if (ptep != NULL)
+    {
+        page_remove_pte(pgdir, la, ptep);
+    }
+}
 
 
 // invalidate a TLB entry, but only if the page tables being

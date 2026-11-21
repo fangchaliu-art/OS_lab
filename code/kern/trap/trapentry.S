@@ -68,6 +68,71 @@ _save_context:
     .macro RESTORE_ALL
 
     #lab3：填写你在lab3中实现的代码，并进行修改补充
+    # lab3 function1 2412084
+    LOCAL _restore_kernel_sscratch
+    LOCAL _restore_csrs
+
+    # s1 = status, s2 = epc.  Both are restored to their trap-time values
+    # later, so they are safe temporaries here.
+    LOAD s1, 32*REGBYTES(sp)
+    LOAD s2, 33*REGBYTES(sp)
+
+    # Decide the return privilege from the status being restored, not from
+    # the register state at entry: status & SSTATUS_SPP == 0 means U mode.
+    # Set sscratch before enabling any interrupt through sstatus.
+    andi s3, s1, SSTATUS_SPP
+    bnez s3, _restore_kernel_sscratch
+
+    # Returning to U mode: the kernel stack pointer for the next trap is
+    # just above this trapframe.  Do not put the user sp in sscratch.
+    addi s3, sp, 36*REGBYTES
+    csrw sscratch, s3
+    j _restore_csrs
+
+_restore_kernel_sscratch:
+    # Returning to S mode: keep sscratch zero so the next kernel trap is
+    # not mistaken for a user trap by SAVE_ALL.
+    csrw sscratch, zero
+
+_restore_csrs:
+    # Adopt the (possibly modified) trapframe return state.
+    csrw sstatus, s1
+    csrw sepc, s2
+
+    # Restore x1 and x3-x31.  x0 is hard-wired zero and must not be written.
+    LOAD x1, 1*REGBYTES(sp)
+    LOAD x3, 3*REGBYTES(sp)
+    LOAD x4, 4*REGBYTES(sp)
+    LOAD x5, 5*REGBYTES(sp)
+    LOAD x6, 6*REGBYTES(sp)
+    LOAD x7, 7*REGBYTES(sp)
+    LOAD x8, 8*REGBYTES(sp)
+    LOAD x9, 9*REGBYTES(sp)
+    LOAD x10, 10*REGBYTES(sp)
+    LOAD x11, 11*REGBYTES(sp)
+    LOAD x12, 12*REGBYTES(sp)
+    LOAD x13, 13*REGBYTES(sp)
+    LOAD x14, 14*REGBYTES(sp)
+    LOAD x15, 15*REGBYTES(sp)
+    LOAD x16, 16*REGBYTES(sp)
+    LOAD x17, 17*REGBYTES(sp)
+    LOAD x18, 18*REGBYTES(sp)
+    LOAD x19, 19*REGBYTES(sp)
+    LOAD x20, 20*REGBYTES(sp)
+    LOAD x21, 21*REGBYTES(sp)
+    LOAD x22, 22*REGBYTES(sp)
+    LOAD x23, 23*REGBYTES(sp)
+    LOAD x24, 24*REGBYTES(sp)
+    LOAD x25, 25*REGBYTES(sp)
+    LOAD x26, 26*REGBYTES(sp)
+    LOAD x27, 27*REGBYTES(sp)
+    LOAD x28, 28*REGBYTES(sp)
+    LOAD x29, 29*REGBYTES(sp)
+    LOAD x30, 30*REGBYTES(sp)
+    LOAD x31, 31*REGBYTES(sp)
+
+    # Restore sp last: it is the base used to address every field above.
+    LOAD x2, 2*REGBYTES(sp)
     .endm
 
     .globl __alltraps
@@ -75,6 +140,11 @@ __alltraps:
     SAVE_ALL
 
     #lab3:填写你在lab3中实现的代码
+    # lab3 function1 2412084
+    # sp points at the trapframe built by SAVE_ALL and is 16-byte aligned
+    # (the frame is 36 * REGBYTES = 288 bytes).  a0 is the first argument.
+    mv a0, sp
+    jal trap
     # sp should be the same as before "jal trap"
 
     .globl __trapret
