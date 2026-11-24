@@ -486,7 +486,71 @@ void exit_range(pde_t *pgdir, uintptr_t start, uintptr_t end)
 }
 
 
-//lab5 function3 YOUR CODE 
+//lab5 function3 2410826
+/* copy_range - duplicate the user mappings in [start, end) from one page
+ * table into another
+ *
+ * share == true maps the same physical pages (page_insert() bumps their
+ * refcount); share == false allocates a fresh page per mapping and copies
+ * the full page.  Returns 0 on success, -E_NO_MEM on failure; pages already
+ * inserted are left for the caller's exit_mmap() to reclaim. */
+int
+copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end, bool share)
+{
+    assert(start % PGSIZE == 0 && end % PGSIZE == 0);
+    assert(USER_ACCESS(start, end));
+
+    do
+    {
+        pte_t *ptep = get_pte(from, start, 0);
+        /* no page table covers this 2 MiB block: skip the whole block */
+        if (ptep == NULL)
+        {
+            start = ROUNDDOWN(start + PTSIZE, PTSIZE);
+            continue;
+        }
+
+        /* a page table exists but this page is unmapped (e.g. the stack
+         * guard page): advance by one page only, not a whole block */
+        if (*ptep & PTE_V)
+        {
+            pte_t *nptep = get_pte(to, start, 1);
+            if (nptep == NULL)
+            {
+                return -E_NO_MEM;
+            }
+
+            uint32_t perm = *ptep & PTE_USER;
+            struct Page *page = pte2page(*ptep);
+
+            if (share)
+            {
+                if (page_insert(to, page, start, perm) != 0)
+                {
+                    return -E_NO_MEM;
+                }
+            }
+            else
+            {
+                struct Page *npage = alloc_page();
+                if (npage == NULL)
+                {
+                    return -E_NO_MEM;
+                }
+                /* copy through kernel virtual addresses, never the user VA */
+                memcpy(page2kva(npage), page2kva(page), PGSIZE);
+                if (page_insert(to, npage, start, perm) != 0)
+                {
+                    free_page(npage);
+                    return -E_NO_MEM;
+                }
+            }
+        }
+        start += PGSIZE;
+    } while (start != 0 && start < end);
+
+    return 0;
+}
 
 //lab5 function1 2412084
 // print_pgdir - walk the active Sv39 page table and print its mappings

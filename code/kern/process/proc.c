@@ -419,8 +419,66 @@ put_pgdir(struct mm_struct *mm)
     free_page(kva2page(mm->pgdir));
 }
 
-//lab5 function3 YOUR CODE update copy_mm
+//lab5 function3 2410826 update copy_mm
+/* copy_mm - give proc an address space according to clone_flags
+ *
+ * returns 0 on success, a negative error code on failure.  On failure the
+ * caller still owns only the PCB and kernel stack; nothing created here is
+ * left behind. */
+static int
+copy_mm(uint32_t clone_flags, struct proc_struct *proc)
+{
+    struct mm_struct *mm, *oldmm = current->mm;
+    int ret;
 
+    /* kernel thread: keep using the boot page table, no user space */
+    if (oldmm == NULL)
+    {
+        return 0;
+    }
+
+    /* CLONE_VM: share the parent's address space, one more reference */
+    if (clone_flags & CLONE_VM)
+    {
+        mm_count_inc(oldmm);
+        proc->mm = oldmm;
+        proc->pgdir = PADDR(oldmm->pgdir);
+        return 0;
+    }
+
+    /* normal fork: build an independent copy of the parent's space */
+    if ((mm = mm_create()) == NULL)
+    {
+        return -E_NO_MEM;
+    }
+    if (setup_pgdir(mm) != 0)
+    {
+        /* no root page table yet, so no exit_mmap()/put_pgdir() */
+        mm_destroy(mm);
+        return -E_NO_MEM;
+    }
+
+    /* dup_mmap() must not lock again; lock only around it */
+    lock_mm(oldmm);
+    {
+        ret = dup_mmap(mm, oldmm);
+    }
+    unlock_mm(oldmm);
+    if (ret != 0)
+    {
+        /* mm_count is still 0, so exit_mmap()'s assertion holds */
+        exit_mmap(mm);
+        put_pgdir(mm);
+        mm_destroy(mm);
+        return ret;
+    }
+
+    /* publish only after the whole copy succeeded */
+    mm_count_inc(mm);
+    proc->mm = mm;
+    proc->pgdir = PADDR(mm->pgdir);
+    return 0;
+}
 
 
 //lab5 function2 2412084
@@ -903,7 +961,64 @@ init_main(void *arg)
 }
 
 
-//lab5 function3 YOUR CODE
+//lab5 function3 2410826
+/* do_fork - create a copy of current as a new runnable process
+ *
+ * clone_flags & CLONE_VM shares the address space (kernel threads and
+ * threads); otherwise the user address space is duplicated.  The child is
+ * returned to via forkret and sees a0 == 0, while the parent gets its pid. */
+int
+do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
+{
+    int ret = -E_NO_FREE_PROC;
+    struct proc_struct *proc;
+    bool intr_flag;
+
+    if (nr_process >= MAX_PROCESS)
+    {
+        goto fork_out;
+    }
+
+    ret = -E_NO_MEM;
+    if ((proc = alloc_proc()) == NULL)
+    {
+        goto fork_out;
+    }
+    /* set_links() relies on parent being set already */
+    proc->parent = current;
+
+    if (setup_kstack(proc) != 0)
+    {
+        goto bad_fork_cleanup_proc;
+    }
+    if ((ret = copy_mm(clone_flags, proc)) != 0)
+    {
+        goto bad_fork_cleanup_kstack;
+    }
+    /* build context/tf now that the kernel stack and mm are ready */
+    copy_thread(proc, stack, tf);
+
+    /* pid allocation, hashing and linking must be one atomic step */
+    local_intr_save(intr_flag);
+    {
+        proc->pid = get_pid();
+        hash_proc(proc);
+        set_links(proc);
+    }
+    local_intr_restore(intr_flag);
+
+    wakeup_proc(proc);
+    ret = proc->pid;
+
+fork_out:
+    return ret;
+
+bad_fork_cleanup_kstack:
+    put_kstack(proc);
+bad_fork_cleanup_proc:
+    kfree(proc);
+    goto fork_out;
+}
 
 
 //lab5 function4 YOUR CODE

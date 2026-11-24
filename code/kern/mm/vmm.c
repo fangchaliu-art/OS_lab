@@ -202,8 +202,40 @@ out:
     return ret;
 }
 
-//lab5 function3 YOUR CODE 
+//lab5 function3 2410826
+/* dup_mmap - copy every VMA of from into to and duplicate its pages
+ *
+ * Called with from->mm_lock held.  On failure it does not clean up: the
+ * caller runs exit_mmap()/put_pgdir()/mm_destroy() on to, which reclaims the
+ * VMAs and pages inserted so far.  from is never modified. */
+int
+dup_mmap(struct mm_struct *to, struct mm_struct *from)
+{
+    assert(to != NULL && from != NULL);
 
+    list_entry_t *list = &(from->mmap_list), *le = list;
+    while ((le = list_next(le)) != list)
+    {
+        struct vma_struct *vma = le2vma(le, list_link);
+        struct vma_struct *nvma;
+
+        /* copy by value through vma_create(), never *nvma = *vma: the list
+         * link and vm_mm must be owned by the new mm, not shared. */
+        if ((nvma = vma_create(vma->vm_start, vma->vm_end, vma->vm_flags)) == NULL)
+        {
+            return -E_NO_MEM;
+        }
+        insert_vma_struct(to, nvma);
+
+        /* copy this VMA's pages right away, no COW (share = false) */
+        if (copy_range(to->pgdir, from->pgdir,
+                       vma->vm_start, vma->vm_end, 0) != 0)
+        {
+            return -E_NO_MEM;
+        }
+    }
+    return 0;
+}
 
 
 void exit_mmap(struct mm_struct *mm)

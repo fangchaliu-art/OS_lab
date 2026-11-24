@@ -1085,6 +1085,407 @@ static int load_icode(unsigned char *binary, size_t size);
 已实现上述统计与检查。`make -B -k obj/kern/mm/kmalloc.o obj/kern/process/proc.o` 通过，无编译警告或错误。使用页分配器桩编译并执行真实 `kmalloc.c`：首次小对象分配使持有页从 0 增至 1，释放后存活量归零而持有页保持；300 次小对象分配/释放后存活量回到基线，`nr_free_pages()` 减少量与 `kmalloc_pages()` 增加量相等；8192 字节大块分配/释放后存活量归零、页数恢复；不释放小对象时 `kallocated()` 高于基线，直接泄漏一页时调整后的页等式不成立。
 
 ---
+
+### 功能模块三：复制用户进程功能
+
+**负责人：** 2410826-马伊汀
+
+#### 模块功能描述
+
+**需要实现/修改的函数：**
+
+```c
+// code/kern/process/proc.c
+static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
+int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf);
+
+// code/kern/mm/vmm.c
+int dup_mmap(struct mm_struct *to, struct mm_struct *from);
+
+// code/kern/mm/pmm.c
+int copy_range(pde_t *to, pde_t *from, uintptr_t start,
+               uintptr_t end, bool share);
+```
+
+**实现位置：**
+
+| 函数 | 文件与标记 |
+| --- | --- |
+| `copy_mm()` | `code/kern/process/proc.c` 的 `//lab5 function3 2410826 update copy_mm` 处 |
+| `do_fork()` | `code/kern/process/proc.c` 的 `//lab5 function3 2410826` 处 |
+| `dup_mmap()` | `code/kern/mm/vmm.c` 的 `//lab5 function3 2410826` 处 |
+| `copy_range()` | `code/kern/mm/pmm.c` 的 `//lab5 function3 2410826` 处 |
+
+**功能说明：**
+
+本模块负责把父进程的执行环境复制成一个新的子进程，使子进程拥有自己的进程控制块、内核栈、trapframe 和用户地址空间映像，`do_fork()` 是整条链路的总入口，负责创建 PCB、准备内核栈、复制地址空间、构造首次执行现场，并把子进程接入进程树、PID 散列表和调度器，成功后父进程得到子进程 PID，子进程首次被调度时从 0 返回。
+
+`copy_mm()` 决定新进程与父进程共享还是复制地址空间，内核线程路径下 `current->mm == NULL`，直接沿用启动页表，`CLONE_VM` 路径下共享父进程的 `mm` 并增加 `mm_count`，普通 `fork` 路径下新建 `mm`、建立只包含内核映射的根页表、调用 `dup_mmap()` 复制 VMA 和页面，只有复制全部成功后才增加引用计数并发布 `proc->mm` 和 `proc->pgdir`。
+
+`dup_mmap()` 按 VMA 粒度复制父进程的合法虚拟内存区域，每个 VMA 通过 `vma_create()` 新建、通过 `insert_vma_struct()` 按地址有序插入，避免直接复制 `list_link` 和 `vm_mm` 破坏链表，每建立一个 VMA 就立即调用 `copy_range()` 复制其页面，失败时保留已经插入的 VMA，由 `copy_mm()` 的 `exit_mmap()` 统一回收。
+
+`copy_range()` 按页粒度复制页面内容并建立新的页表映射，它遍历 Sv39 三级页表，遇到整块 2 MiB 页表不存在时跳到下一个 2 MiB 边界，遇到页表存在但 PTE 无效时只前进一页，遇到有效页时通过 `page2kva()` 取得内核虚拟地址、复制完整 `PGSIZE`、按源 PTE 的用户权限建立目标映射，`share` 参数为 `true` 时共享同一物理页并为 Challenge 1 的 COW 预留入口，为 `false` 时分配新页并复制。
+
+本模块与功能模块一、二、四共同维护进程生命周期，`sys_fork()` 把用户栈指针和用户 trapframe 传给 `do_fork()`，`kernel_thread()` 通过 `CLONE_VM` 创建内核线程，`do_exit()` 在进程退出时减少 `mm_count` 并在归零时释放地址空间，`do_wait()` 只回收内核栈和 PCB，`test_lab5_process_create` 检查 `initproc` 的父进程、状态、上下文和 PID，本模块的失败回滚和引用计数必须与这些约定保持一致。
+
+**主要要求（spec）：**
+
+1. **进程创建入口。** `do_fork()` 先检查 `nr_process >= MAX_PROCESS`，达到上限时直接返回 `-E_NO_FREE_PROC` 且不分配任何对象，随后 `alloc_proc()` 失败返回 `-E_NO_MEM`，成功后立即设置 `proc->parent = current`，再依次执行 `setup_kstack()`、`copy_mm()`、`copy_thread()`，最后在关中断临界区内完成 `get_pid()`、`hash_proc()`、`set_links()`，临界区外 `wakeup_proc()` 并返回子进程 PID。
+2. **失败回滚。** `setup_kstack()` 失败只释放 PCB，`copy_mm()` 失败先 `put_kstack()` 再释放 PCB，`copy_mm()` 内部 `mm_create()` 失败直接返回，`setup_pgdir()` 失败只 `mm_destroy()`，`dup_mmap()` 失败按 `exit_mmap()`、`put_pgdir()`、`mm_destroy()` 的顺序清理，所有路径都不重复释放、不释放未分配对象、不留下半挂接的进程。
+3. **地址空间决策。** 内核线程 `current->mm == NULL` 时直接返回 0，`proc->mm` 保持 `NULL`、`proc->pgdir` 保持 `boot_pgdir_pa`，`CLONE_VM` 时共享父进程 `mm` 并 `mm_count_inc()`，普通 `fork` 时新建 `mm`、`setup_pgdir()`、`dup_mmap()`，只有复制全部成功后才 `mm_count_inc()` 并发布 `proc->mm`/`proc->pgdir`，且 `proc->pgdir` 必须是 `PADDR(mm->pgdir)`。
+4. **VMA 复制。** `dup_mmap()` 按 `from->mmap_list` 顺序遍历，每个 VMA 通过 `vma_create()` 新建、`insert_vma_struct()` 插入，不能直接 `*nvma = *vma`，每插入一个 VMA 就立即对其区间调用 `copy_range(..., share = 0)`，失败时不在 `dup_mmap()` 内清理，交给 `copy_mm()` 的 `exit_mmap()` 统一回收。
+5. **页面复制。** `copy_range()` 在 `get_pte(from, start, 0) == NULL` 时按 `PTSIZE` 跳到下一个 2 MiB 边界，在页表存在但 PTE 无效时只前进 `PGSIZE`，有效页通过 `page2kva()` 取内核虚拟地址、复制完整 `PGSIZE`、按源 PTE 的 `PTE_USER` 权限建立目标映射，`share = true` 时共享同一物理页，`share = false` 时分配新页并复制，`page_insert()` 失败时释放刚分配的页并返回 `-E_NO_MEM`。
+6. **边界与验证。** 模块内不调用 `schedule()`/`proc_run()`/`lsatp()`，不在 `copy_mm()` 持有 `mm_lock` 时让 `dup_mmap()` 重复加锁，不修改父进程的 VMA 链表、页表和页面内容，验证以分文件编译、符号检查、静态复查为主，完整运行验证待后续联合测试，不把单文件编译通过写成运行通过。
+
+#### 最终提示词
+
+````markdown
+# 功能模块三：复制用户进程提示词
+
+[PROMPT]
+
+**任务：**
+
+在当前 RISC-V ucore Lab5 工程中实现进程复制功能，修改以下实际文件：
+
+- `code/kern/process/proc.c`：在 `//lab5 function3 YOUR CODE update copy_mm` 标记处实现 `static int copy_mm(uint32_t clone_flags, struct proc_struct *proc)`；在 `//lab5 function3 YOUR CODE` 标记处实现 `int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)`。
+- `code/kern/mm/vmm.c`：在 `//lab5 function3 YOUR CODE` 标记处实现 `int dup_mmap(struct mm_struct *to, struct mm_struct *from)`。
+- `code/kern/mm/pmm.c`：在 `//lab5 function3 YOUR CODE` 标记处实现 `int copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end, bool share)`。
+
+完成“父进程 → 子进程”的完整复制链：创建进程控制块、内核栈、用户地址空间、用户页内容和首次执行现场，并把子进程接入进程树、PID 散列表和调度器。成功后父进程得到子进程 PID，子进程首次被调度时从 0 返回；内核线程创建路径（`CLONE_VM`）必须继续可用。
+
+**操作要求：**
+
+- 必须修改项目中的实际文件，不能只展示代码。
+- 先阅读现有代码和头文件。只在上述三个文件的四个 `//lab5 function3 YOUR CODE` 标记处补充实现，保留标记和原有说明，将标记中的 `YOUR CODE` 替换为学号 `2410826`，并在新增实现上方添加 `//lab5 function3 2410826`。
+- 路径以当前工程为准：以下路径相对工程根目录（包含 `code/`、`report/` 的目录）；若工作区直接打开的是 `code/`，则去掉前缀 `code/`。
+- 允许在 `proc.c`、`vmm.c`、`pmm.c` 内增加必要的 `static` 辅助函数和前置声明；不新增公开接口，不修改 `proc.h`、`vmm.h`、`pmm.h` 中的函数签名、结构体或宏定义，不修改 Makefile、用户态代码和测试代码。
+- 不实现或覆盖功能模块一（`exception_handler`、`syscall`、`sys_*`）、功能模块二（`alloc_proc`、`kernel_thread`、`init_main`、`user_main`、`kernel_execve`、`do_execve`、`load_icode`、`do_wait`）和功能模块四（`do_exit`、`do_yield`、`do_kill`）。这些函数由其他成员负责，本任务只调用它们或依赖它们已约定的语义。
+- 本任务不实现 Copy-on-Write。`copy_range` 的 `share` 参数只需保持正确语义（`true` 时共享同一物理页，`false` 时复制页面内容），本模块的 `dup_mmap` 使用 `share = 0` 的复制路径；不要在本任务中写保护、设置 COW 位或修改页故障处理。
+- 不提交或推送 Git。
+
+**输出要求：**
+
+完成后说明四个函数的实现位置、进程创建与失败回滚顺序、`mm_count` 引用计数的变化、内核线程路径与普通用户进程路径的差异，以及实际验证结果。区分单文件编译、完整链接和运行测试；由于功能模块一和四尚未接入而无法链接或运行的部分，应如实说明原因，不得把预计结果写成测试通过。
+
+[RELY]
+
+## 1. 当前框架与进程控制块
+
+以实际代码为准核对 `code/kern/process/proc.c`、`proc.h`、`kern/mm/vmm.h`、`kern/mm/pmm.h`、`kern/schedule/sched.h`、`kern/sync/sync.h`、`libs/unistd.h`、`libs/error.h`、`libs/list.h`、`libs/riscv.h`、`kern/mm/mmu.h`、`kern/mm/memlayout.h`。
+
+`struct proc_struct` 的关键字段：
+
+- `state`：`PROC_UNINIT`、`PROC_SLEEPING`、`PROC_RUNNABLE`、`PROC_ZOMBIE`。
+- `pid`、`runs`、`kstack`、`need_resched`、`parent`、`mm`、`context`、`tf`、`pgdir`、`flags`、`name`。
+- `list_link`、`hash_link`、`exit_code`、`wait_state`、`cptr`、`optr`、`yptr`。
+- `pgdir` 保存页表**物理基址**；`mm->pgdir` 保存页表**内核虚拟地址**。
+
+`proc.c` 中已有、可直接复用的实现：
+
+- `alloc_proc()`：分配并初始化全部字段，`state = PROC_UNINIT`、`pid = -1`、`mm = NULL`、`pgdir = boot_pgdir_pa`、`context` 清零、`list_link`/`hash_link` 已 `list_init`。
+- `setup_kstack(proc)`：分配 `KSTACKPAGE` 页内核栈并写入 `proc->kstack`，失败返回 `-E_NO_MEM`；`put_kstack(proc)` 释放。
+- `copy_thread(proc, stack, tf)`：已由功能模块二实现。它在 `proc->kstack` 顶部放置 trapframe，复制 `*tf`，把子进程 `gpr.a0` 置 0；`stack != 0` 时把 `gpr.sp` 设为 `stack`，否则设为 trapframe 地址；并设置 `context.ra = forkret`、`context.sp = proc->tf`。**不要重新实现或修改它。**
+- `get_pid()`：在 `proc_list` 中分配唯一 PID。
+- `hash_proc(proc)` / `unhash_proc(proc)`：维护 PID 散列表。
+- `set_links(proc)` / `remove_links(proc)`：维护全局进程链表、父子/兄弟关系和 `nr_process`。`set_links` 内部已经执行 `nr_process++`，**不要重复增减**。
+- `wakeup_proc(proc)`：在中断保护下把非 `PROC_RUNNABLE` 的进程置为 `PROC_RUNNABLE` 并清除 `wait_state`；不能对 `PROC_ZOMBIE` 调用。
+- `nr_process` 是 `proc.c` 内的 `static int`；`MAX_PROCESS` 定义在 `proc.h`。
+
+## 2. 地址空间与页表接口
+
+`struct mm_struct` 包含 `mmap_list`、`mmap_cache`、`pgdir`、`map_count`、`sm_priv`、`mm_count`、`mm_lock`。`mm_count` 表示共享该地址空间的进程数，每个进程持有一个引用。
+
+可复用接口：
+
+```c
+struct mm_struct *mm_create(void);
+void mm_destroy(struct mm_struct *mm);
+int mm_map(struct mm_struct *mm, uintptr_t addr, size_t len,
+           uint32_t vm_flags, struct vma_struct **vma_store);
+void exit_mmap(struct mm_struct *mm);
+struct vma_struct *vma_create(uintptr_t vm_start, uintptr_t vm_end,
+                              uint32_t vm_flags);
+void insert_vma_struct(struct mm_struct *mm, struct vma_struct *vma);
+int dup_mmap(struct mm_struct *to, struct mm_struct *from);
+pte_t *get_pte(pde_t *pgdir, uintptr_t la, bool create);
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm);
+struct Page *alloc_page(void);
+void free_page(struct Page *page);
+void *page2kva(struct Page *page);
+struct Page *pte2page(pte_t pte);
+void tlb_invalidate(pde_t *pgdir, uintptr_t la);
+void flush_tlb(void);
+```
+
+关键语义：
+
+- `mm_create()`：分配并初始化 `mm`，`mm_count = 0`，VMA 链表为空，`pgdir = NULL`。
+- `setup_pgdir(mm)`（`proc.c` 内 `static`）：分配一页作为根页表，`memcpy(pgdir, boot_pgdir_va, PGSIZE)`，从而保留内核映射，并设置 `mm->pgdir`（内核虚拟地址）。`put_pgdir(mm)` 释放根页表。
+- `exit_mmap(mm)`：要求 `mm_count(mm) == 0`。它遍历 VMA 链表，先 `unmap_range` 撤销数据页映射并处理引用计数，再 `exit_range` 回收空的中间页表。**它不释放 `mm` 本身，也不释放根页表。**
+- `mm_destroy(mm)`：要求 `mm_count(mm) == 0`，释放全部 VMA 和 `mm`；**不释放根页表**。
+- `insert_vma_struct(mm, vma)`：按 `vm_start` 有序插入，设置 `vma->vm_mm`，并执行 `map_count++`。
+- `lock_mm(mm)` / `unlock_mm(mm)`：`mm_lock` 是非递归锁；`lock()` 在竞争时会调用 `schedule()`，因此**不要在已经持有锁的情况下再次加锁**。
+
+页表与地址常量：
+
+- Sv39 三级页表：`PDX1`（1 GiB）、`PDX0`（2 MiB）、`PTX`（4 KiB）。
+- `PGSIZE = 4096`、`PTSIZE = 2 MiB`、`PDSIZE = 1 GiB`、`NPTEENTRY = 512`。
+- 用户地址范围：`USERBASE <= addr < USERTOP`，`USERTOP == USTACKTOP == 0x80000000`。
+- `USER_ACCESS(start, end)` 要求 `USERBASE <= start < end <= USERTOP`。
+- `get_pte(pgdir, la, 0)` 在任一级页表不存在时返回 `NULL`；`create = 1` 时会分配缺失的页表页、清零，并以 `PTE_U | PTE_V` 建立非叶子表项。
+- `page_insert(pgdir, page, la, perm)`：先 `page_ref_inc(page)`；若该地址已有映射，则通过 `page_remove_pte` 递减旧页引用并在归零时释放旧页；然后写入 `pte_create(page2ppn(page), perm)` 并刷新 TLB。返回 `0` 或 `-E_NO_MEM`。
+- `PTE_V/R/W/X/U` 见 `mmu.h`；`PTE_USER` 为 `R | W | X | U | V`。`pte_create` 会自行设置 `PTE_V`。
+- 用户栈 VMA 覆盖 `[USTACKTOP - USTACKSIZE, USTACKTOP)`，但**栈底保护页没有建立页映射**；`copy_range` 遇到该页时应自然跳过。
+
+## 3. 两条创建路径
+
+- `kernel_thread(fn, arg, clone_flags)`（功能模块二）构造内核态 trapframe，并调用 `do_fork(clone_flags | CLONE_VM, 0, &tf)`。这条路径中 `current->mm == NULL`，`stack == 0`，`tf` 指向内核栈上的临时 trapframe。
+- `sys_fork()`（功能模块一）调用 `do_fork(0, current->tf->gpr.sp, current->tf)`。这条路径中 `current->mm != NULL`，`stack` 是用户栈指针，`tf` 是用户态 trapframe；异常处理已经把 `tf->epc` 前移 4 字节，因此子进程会从 `ecall` 的下一条指令继续执行。
+- `do_exit()`（功能模块四）会对 `current->mm` 执行 `mm_count_dec`，只有计数归零时才依次 `exit_mmap`、`put_pgdir`、`mm_destroy`；`do_wait()`（功能模块二）只回收内核栈和 PCB，不释放 `mm`。因此 `copy_mm` 必须让每个新进程恰好持有该 `mm` 的一个引用。
+- `test_lab5_process_create` 会检查 `initproc->parent == idleproc`、`initproc->state == PROC_RUNNABLE`、`initproc->context.ra != 0`、`context.sp != 0`、`pid == 1`，本模块不能破坏这些不变量。
+
+## 4. 中断保护
+
+```c
+bool intr_flag;
+local_intr_save(intr_flag);
+{
+    /* 临界区 */
+}
+local_intr_restore(intr_flag);
+```
+
+`local_intr_save` 保存进入前的 `sstatus.SIE` 并关中断；`local_intr_restore` 仅在原来开中断时恢复。PID 分配、散列插入和进程树挂接必须在同一临界区内完成。
+
+[GUARANTEE]
+
+实现以下接口，签名必须与头文件及现有声明一致：
+
+```c
+int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf);
+
+static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
+
+int dup_mmap(struct mm_struct *to, struct mm_struct *from);
+
+int copy_range(pde_t *to, pde_t *from, uintptr_t start,
+               uintptr_t end, bool share);
+```
+
+交付结果必须满足：
+
+- 普通 `fork` 创建的子进程拥有独立的 `mm`、根页表和数据页，父子进程的用户空间内容在创建时刻一致，此后互不影响。
+- 内核线程路径（`current->mm == NULL`）不复制用户地址空间，子进程继续使用启动页表。
+- `CLONE_VM` 路径共享父进程的 `mm`，并正确增加 `mm_count`。
+- 成功时子进程已进入 PID 散列表、`proc_list` 和父子/兄弟关系，状态为 `PROC_RUNNABLE`，父进程得到正 PID。
+- 任一失败路径都不泄漏 PCB、内核栈、`mm`、根页表、页表页或数据页，也不留下半挂接的进程。
+- 不修改父进程的页表、VMA 链表和页面内容。
+- 不在 `do_fork` 内直接调度；只把子进程置为可运行，由调度器决定何时运行。
+
+本任务不新增公开接口和全局变量，不需要修改任何头文件。
+
+[SPECIFICATION]
+
+## 1. do_fork
+
+**Pre-Condition：**
+
+- `current` 有效，且 `current->wait_state == 0`。
+- 普通用户路径：`current->mm != NULL`，`tf` 指向当前用户 trapframe，`stack` 是用户栈指针。
+- 内核线程路径：`current->mm == NULL`，`stack == 0`，`tf` 指向内核构造的 trapframe。
+- `proc_list`、`hash_list` 已由 `proc_init()` 初始化。
+
+**Post-Condition：**
+
+- 成功：返回子进程 PID（正数）。子进程的 PCB、内核栈、`mm`、`pgdir`、trapframe 和 `context` 均已就绪；已通过 `hash_proc`、`set_links` 接入管理结构；状态为 `PROC_RUNNABLE`。子进程第一次被调度时从 `forkret` 进入 `forkrets`，并按 `tf->epc` 返回用户态或内核线程入口，`a0 == 0`。
+- 失败：返回负错误码；除 `current` 外不留下任何新对象。
+
+**Case 1：进程数达到上限。** `nr_process >= MAX_PROCESS` 时直接返回 `-E_NO_FREE_PROC`，不分配任何对象。
+
+**Case 2：PCB 分配失败。** `alloc_proc()` 返回 `NULL` 时返回 `-E_NO_MEM`。
+
+**Case 3：内核栈分配失败。** `setup_kstack()` 失败时释放 PCB 并返回 `-E_NO_MEM`。
+
+**Case 4：地址空间复制失败。** `copy_mm()` 失败时依次释放内核栈和 PCB，返回 `copy_mm()` 的原始错误码。
+
+**Case 5：创建成功。** 先 `copy_thread()` 构造初始现场，再在中断保护下完成 `get_pid()`、`hash_proc()`、`set_links()`，最后 `wakeup_proc()` 并把 PID 作为返回值。
+
+**Requirements：**
+
+- 在调用 `set_links()` 之前必须设置 `proc->parent = current`；`set_links()` 依赖该字段。
+- `copy_thread()` 必须在 `copy_mm()` 成功之后调用，因为它依赖已经分配好的内核栈。
+- `nr_process`、`proc_list`、`hash_list` 和亲属关系只通过 `set_links()`、`hash_proc()` 维护，不能手工重复增减。
+- PID 分配、散列插入和链表挂接必须在同一关中断临界区内完成，避免并发创建得到重复 PID 或破坏进程树。
+- `wakeup_proc()` 放在临界区之外调用即可；不要对未初始化或僵尸进程调用。
+- 失败路径的顺序必须是：`put_kstack(proc)` → `kfree(proc)`；不要对尚未分配的 `mm` 或内核栈执行释放。
+- 不在 `do_fork()` 内调用 `schedule()`、`proc_run()` 或 `lsatp()`；不要复制或修改调用者的 trapframe。
+- 不手工设置 `proc->pid`、`proc->state` 之外的调度字段；`copy_thread()` 已负责 `context`、`tf` 和子进程返回值。
+- 不允许把 `CLONE_VM` 路径误写成复制页表，也不允许把普通 `fork` 误写成共享页表。
+
+## 2. copy_mm
+
+**Pre-Condition：**
+
+- `proc` 的 PCB 已由 `alloc_proc()` 初始化，内核栈已由 `setup_kstack()` 分配。
+- `current->mm` 可能为 `NULL`（内核线程）。
+- 普通路径下父进程的 VMA 链表和页表处于一致状态。
+
+**Post-Condition：**
+
+- 内核线程路径：返回 `0`，`proc->mm` 保持 `NULL`，`proc->pgdir` 保持 `boot_pgdir_pa`。
+- `CLONE_VM` 路径：`proc->mm = current->mm`，`mm_count` 增加 1，`proc->pgdir = PADDR(mm->pgdir)`。
+- 普通路径：新建 `mm` 和根页表，复制父进程全部 VMA 及页内容，`mm_count == 1`，`proc->pgdir = PADDR(mm->pgdir)`，返回 `0`。
+- 失败：返回负错误码，不留下新建的 `mm`、根页表、页表页、数据页或 VMA。
+
+**Case 1：内核线程。** `current->mm == NULL` 时直接返回 `0`，不创建 `mm`，不修改 `proc->pgdir`。
+
+**Case 2：`CLONE_VM`。** 令 `mm = current->mm`，执行 `mm_count_inc(mm)`，设置 `proc->mm` 和 `proc->pgdir` 后返回 `0`。
+
+**Case 3：普通用户进程。** 依次执行 `mm_create()`、`setup_pgdir(mm)`、`lock_mm(oldmm)`、`dup_mmap(mm, oldmm)`、`unlock_mm(oldmm)`；全部成功后 `mm_count_inc(mm)`，设置 `proc->mm` 和 `proc->pgdir`。
+
+**Case 4：`mm_create()` 失败。** 返回 `-E_NO_MEM`，不需要清理。
+
+**Case 5：`setup_pgdir()` 失败。** 执行 `mm_destroy(mm)` 后返回 `-E_NO_MEM`；此时不能调用 `exit_mmap()` 或 `put_pgdir()`，因为根页表尚未建立。
+
+**Case 6：`dup_mmap()` 失败。** 按 `exit_mmap(mm)` → `put_pgdir(mm)` → `mm_destroy(mm)` 的顺序清理，返回 `dup_mmap()` 的原始错误码。
+
+**Requirements：**
+
+- 只有 `dup_mmap()` 成功后才能执行 `mm_count_inc()`；失败时 `mm_count` 必须仍为 0，否则 `exit_mmap()` 的断言会失败。
+- `lock_mm(oldmm)` 只包住 `dup_mmap()`；`dup_mmap()` 内部不得再次加锁，否则会在非递归锁上自旋并调用 `schedule()`。
+- 保留 `dup_mmap()` 返回的错误码，不要统一改写成 `-E_INVAL`。
+- `proc->pgdir` 必须是页表**物理地址**，即 `PADDR(mm->pgdir)`；不能把内核虚拟地址直接写入。
+- 成功路径不切换页表、不刷新 TLB、不调用 `lsatp()`；子进程尚未运行。
+- 不修改父进程的 `mm`、VMA 链表和页表；`CLONE_VM` 时也不要释放父进程的 `mm`。
+- 本任务不设置写保护、不设置 COW 位；`dup_mmap` 必须使用复制路径。
+
+## 3. dup_mmap
+
+**Pre-Condition：**
+
+- `to != NULL`、`from != NULL`。
+- `to->pgdir` 已由 `setup_pgdir()` 建立，且只包含内核映射；`to` 的 VMA 链表为空。
+- `from` 的 VMA 链表按 `vm_start` 有序，父进程页表与 VMA 一致。
+
+**Post-Condition：**
+
+- `to` 中按相同顺序、相同起止地址、相同 `vm_flags` 建立全部 VMA，`map_count` 与 `from` 一致。
+- 每个已映射的用户页在 `to` 中有独立的数据页，内容与 `from` 相同，权限与 `from` 相同。
+- 返回 `0`。
+
+**Case 1：父进程没有 VMA。** 直接返回 `0`。
+
+**Case 2：正常 VMA。** 对每个 VMA 执行 `vma_create()`、`insert_vma_struct()`、`copy_range(to->pgdir, from->pgdir, vma->vm_start, vma->vm_end, 0)`。
+
+**Case 3：`vma_create()` 失败。** 返回 `-E_NO_MEM`；已经插入的 VMA 和已经复制的页面由调用者的 `exit_mmap()` 统一清理。
+
+**Case 4：`copy_range()` 失败。** 返回 `-E_NO_MEM`；同样交由调用者清理。
+
+**Requirements：**
+
+- 必须通过 `vma_create()` + `insert_vma_struct()` 创建新 VMA，不能直接 `*nvma = *vma`，否则会复制 `list_link`、`vm_mm` 并破坏链表。
+- 必须保持 VMA 的顺序；`insert_vma_struct()` 会按地址插入并设置 `vm_mm`、增加 `map_count`，不要手工修改这些字段。
+- 每建立一个 VMA 后立即复制其页面；不要先建立全部 VMA 再统一复制，否则失败时难以确认哪些区间已经复制。
+- 失败时不要自行释放页面、页表或 `to->mm`；`copy_mm()` 的清理路径会处理已经插入的对象。
+- 不修改 `from` 的 VMA 链表、页表或页面内容。
+- 本任务固定使用 `share = 0`；`share = 1` 的共享语义由 `copy_range()` 支持，但 `dup_mmap()` 不启用。
+
+## 4. copy_range
+
+**Pre-Condition：**
+
+- `start`、`end` 均按 `PGSIZE` 对齐，且满足 `USER_ACCESS(start, end)`。
+- `from` 是有效的页表基址（内核虚拟地址）。
+- `to` 是有效的页表基址，且已由 `setup_pgdir()` 建立。
+- 本模块中 `share == false`；函数仍需正确处理 `share == true`。
+
+**Post-Condition：**
+
+- 对区间内每个有效用户页，`to` 建立对应映射：
+  - `share == false`：分配新页，复制原页全部 `PGSIZE` 字节，权限与源页一致。
+  - `share == true`：把同一物理页映射到 `to`，权限与源页一致；`page_insert()` 会增加该页引用计数。
+- 返回 `0`。
+
+**Case 1：整个 2 MiB 页表不存在。** `get_pte(from, start, 0) == NULL` 表示当前 2 MiB 区间没有任何页表；执行 `start = ROUNDDOWN(start + PTSIZE, PTSIZE)` 跳到下一个 2 MiB 边界后继续。
+
+**Case 2：页表存在但当前 PTE 无效。** `*ptep` 没有 `PTE_V`（例如用户栈底保护页）：执行 `start += PGSIZE` 后继续。
+
+**Case 3：有效页，复制模式。** `get_pte(to, start, 1)` 建立目标 PTE；取 `perm = *ptep & PTE_USER`；取 `page = pte2page(*ptep)`；`npage = alloc_page()`；`memcpy(page2kva(npage), page2kva(page), PGSIZE)`；`page_insert(to, npage, start, perm)`。
+
+**Case 4：有效页，共享模式。** 同样取得 `perm` 和 `page`，执行 `page_insert(to, page, start, perm)`，不分配新页。
+
+**Case 5：目标页表建立失败。** `get_pte(to, start, 1) == NULL` 时返回 `-E_NO_MEM`。
+
+**Case 6：新页分配失败。** `alloc_page() == NULL` 时返回 `-E_NO_MEM`。
+
+**Case 7：`page_insert()` 失败。** 复制模式下先 `free_page(npage)`，再返回 `-E_NO_MEM`；共享模式下直接返回。
+
+**Requirements：**
+
+- 必须通过 `page2kva(page)` 取得内核虚拟地址后 `memcpy`，禁止直接把用户虚拟地址当源或目的。
+- 复制长度必须是完整的 `PGSIZE`，不能使用段大小或 VMA 长度。
+- 权限必须来自源 PTE 的用户权限位（`PTE_U | PTE_R | PTE_W | PTE_X`，可包含 `PTE_V`）；不得强制添加 `PTE_W`，不得丢失 `PTE_U`。
+- 复制模式必须让目标页获得独立物理页；共享模式才允许 `page_insert(to, page, ...)`。
+- 只有在“页表不存在”时才按 `PTSIZE` 跳跃；页表存在但 PTE 无效时必须只前进 `PGSIZE`，不能跳过同一页表中的其他有效页。
+- 循环必须使用 `while (start != 0 && start < end)` 之类的回绕保护，避免地址溢出导致死循环。
+- 失败时不要释放已经成功插入的目标页、页表页或 VMA；这些由 `copy_mm()` 的 `exit_mmap()` 统一回收。只允许释放本次刚刚分配但尚未成功插入的 `npage`。
+- 不修改 `from` 的 PTE，不为父进程页面写保护，不设置 COW 位；本任务不做 COW。
+- 不手工操作 TLB；`page_insert()` 已经对新映射执行 `tlb_invalidate()`。
+
+## 5. 验证要求
+
+完成后按以下顺序验证，并如实报告结果：
+
+1. 单文件编译：
+
+```bash
+cd code
+make -B -k obj/kern/process/proc.o obj/kern/mm/vmm.o obj/kern/mm/pmm.o
+```
+
+三个目标都应编译通过，不出现新增警告或错误。
+
+2. 静态检查：
+
+- `do_fork` 的失败路径没有重复释放，也没有在 `set_links` 之外修改 `nr_process`。
+- `copy_mm` 的 `mm_count_inc` 只在 `dup_mmap` 成功后执行。
+- `dup_mmap` 没有重复加锁。
+- `copy_range` 在页表不存在和 PTE 无效两种情况下分别按 `PTSIZE` 和 `PGSIZE` 前进。
+- `copy_range` 复制页面时使用 `page2kva`。
+
+3. 完整运行验证（依赖功能模块一、二、四）：
+
+- `make qemu` 能启动，`hello` 能输出并退出。
+- `make grade` 中 `forktest`、`forktree`、`exit`、`spin`、`badarg` 等与 fork 相关的用例通过。
+- `forktest` 输出 `forktest pass.`，不出现 `fork claimed to work ... times!`、`wait stopped early`、`wait got too many`。
+- `test_lab5_process_create` 的断言全部通过。
+
+如果完整链接因 `do_exit()` 等模块四函数尚未实现而失败，明确说明这是当前阻塞点，不要用空函数绕过，也不要把单文件编译通过写成运行通过。
+````
+
+#### 实现迭代过程
+
+本模块已完成一次迭代，代码生成后通过分文件编译和静态复查，完整链接按预期阻塞在功能模块四，运行测试尚未执行。
+
+##### 第一次迭代
+
+**遇到的问题：**
+
+完整的 `make` 在链接 `bin/kernel` 时失败，未定义符号集中在 `do_exit`、`do_yield`、`do_kill`，分别由 `trap.o`、`entry.o`、`proc.o` 和 `syscall.o` 引用，这三个函数都属于功能模块四，不属于本模块的实现范围；由于内核镜像无法生成，`make qemu`、`make grade`、`forktest`、`forktree`、`exit`、`spin`、`badarg` 以及 `test_lab5_process_create` 都无法运行，不能声称这些测试已经通过。
+
+静态复查同时核对了四个函数的失败路径和关键不变量，`do_fork()` 的 `proc->parent` 在 `set_links()` 之前设置、`nr_process` 只由 `set_links()` 修改、失败标签按 `put_kstack()` 到 `kfree()` 的顺序回退，`copy_mm()` 的 `mm_count_inc()` 只在 `dup_mmap()` 成功后执行、`setup_pgdir()` 失败时不调用 `exit_mmap()`/`put_pgdir()`，`dup_mmap()` 不重复加锁、不直接复制 VMA 结构，`copy_range()` 在页表不存在和 PTE 无效两种情况下分别按 `PTSIZE` 和 `PGSIZE` 前进、复制时使用 `page2kva()`，这些检查没有发现模块三自身的功能性缺陷。
+
+**问题解决策略：**
+
+保持模块三的修改范围，不实现或覆盖功能模块四的 `do_exit()`、`do_yield()`、`do_kill()`，不用空函数绕过链接错误，也不修改功能模块一、二的文件；把验证分为两层，当前完成分文件编译、符号检查和静态复查，完整运行验证待后续联合测试，`copy_range()` 的 `share = true` 分支保留但本模块的 `dup_mmap()` 固定使用 `share = 0`，为 Challenge 1 的 COW 留出入口。
+
+**本轮验证结果：**
+
+`make -B -k obj/kern/process/proc.o obj/kern/mm/vmm.o obj/kern/mm/pmm.o` 三个目标全部编译通过，未出现新增警告或错误；符号检查确认 `proc.o` 定义 `do_fork` 并引用 `dup_mmap`，`vmm.o` 定义 `dup_mmap` 并引用 `copy_range`，`pmm.o` 定义 `copy_range`，`copy_mm` 为 `static` 且被 `-O2` 内联；完整链接只在功能模块四的符号上失败；运行测试未执行，完整运行验证待后续联合测试。
+
+---
+
 ## 五、测试与验证
 
 <!-- 根据该实验的具体情况，提供完整的测试运行截图，应包含：
@@ -1198,6 +1599,47 @@ make -B -k \
 **测试截图：**
 
 ![模块二测试截图](images/lab5-module2-compile-2.png)
+
+---
+
+### 5.4 模块三：进程复制编译、静态与链接阻塞检查
+
+**负责人：** 2410826-马伊汀
+
+**测试目的：** 检查 `do_fork()`、`copy_mm()`、`dup_mmap()`、`copy_range()` 能够生成目标文件，核对失败回滚、`mm_count`、VMA 复制顺序、页表遍历与权限位，确认完整链接的阻塞点确实属于功能模块四而不是模块三。
+
+**执行方法：** 在 WSL 中进入本机的工程 `code` 目录（本机 WSL 的 PATH 已包含 `riscv64-unknown-elf-gcc 10.2.0`），先强制重新编译模块三涉及的三个目标文件，再用 `nm` 检查符号，最后执行一次完整构建并收集链接错误。
+
+```bash
+cd "/mnt/d/1南开/课程/大三上学期/操作系统/lab/lab5/OS_lab/code"
+
+make -B -k \
+  obj/kern/process/proc.o \
+  obj/kern/mm/vmm.o \
+  obj/kern/mm/pmm.o
+
+riscv64-unknown-elf-nm obj/kern/process/proc.o | grep -E 'do_fork|copy_mm|dup_mmap'
+riscv64-unknown-elf-nm obj/kern/mm/vmm.o | grep -E 'dup_mmap|copy_range'
+riscv64-unknown-elf-nm obj/kern/mm/pmm.o | grep -E 'copy_range'
+
+make -B -k 2>&1 | tee /tmp/lab5-link.log
+grep -nE 'undefined reference|do_exit|do_yield|do_kill' /tmp/lab5-link.log
+```
+
+**实际结果：**
+
+| 检查项 | 结果 | 说明 |
+| --- | --- | --- |
+| 分文件编译 | 通过 | `proc.o`、`vmm.o`、`pmm.o` 三个目标全部重新编译成功，模块三代码没有新增警告或错误 |
+| 符号检查 | 通过 | `proc.o` 定义 `do_fork` 并引用 `dup_mmap`，`vmm.o` 定义 `dup_mmap` 并引用 `copy_range`，`pmm.o` 定义 `copy_range`，`copy_mm` 为 `static` 且被 `-O2` 内联 |
+| 静态检查 | 通过 | `do_fork` 失败路径无重复释放，`nr_process` 仅由 `set_links` 增减；`copy_mm` 的 `mm_count_inc` 只在 `dup_mmap` 成功后执行，失败时计数保持 0；`dup_mmap` 不重复加锁；`copy_range` 在页表不存在时按 `PTSIZE` 跳跃、PTE 无效时按 `PGSIZE` 前进，复制使用 `page2kva`，`page_insert` 失败时释放刚分配的页 |
+
+**结果说明：** 从编译记录看，`proc.o`、`vmm.o`、`pmm.o` 三个目标都被重新编译，模块三的四个函数没有引入新的警告或错误；从符号表看，`do_fork`、`dup_mmap`、`copy_range` 分别落在 `proc.o`、`vmm.o`、`pmm.o` 中，`copy_mm` 作为 `static` 函数被 `-O2` 内联，符合当前框架的编译方式；静态复查确认 `do_fork` 的失败回滚、`copy_mm` 的 `mm_count` 发布时机、`dup_mmap` 的 VMA 复制顺序以及 `copy_range` 的页表遍历与权限处理都符合前述约定；完整链接的未定义符号只有 `do_exit`、`do_yield`、`do_kill`，均属于功能模块四，完整运行验证待后续联合测试。
+
+**测试截图：**
+
+![模块三分文件编译结果：proc.o、vmm.o、pmm.o 均编译通过，无新增警告或错误](images/lab5-module3-compile.png)
+
 
 ---
 
