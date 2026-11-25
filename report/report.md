@@ -16,8 +16,8 @@
 | 成员                | 负责的练习/模块                                                                                                                                       | 报告分工                                                                                                                          |
 | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | 2412084-刘芳希（A） | 前置任务：补齐 Lab2/3/4 基础代码，设计 First-Fit 提示词，更新 `RESTORE_ALL` 以支持用户态、内核态返回；功能模块一：用户态系统调用；功能模块二：创建、加载第一个用户进程及 `do_wait()` 等。 | 编写前置任务、模块一和模块二的功能说明、spec、提示词及迭代记录；记录前置代码编译检查与本人模块的验证结果。 |
-| 2410826-马伊汀（B） | 功能模块三：进程复制，包括 `do_fork()`、`copy_mm()`、`dup_mmap()`、`copy_range()`；Challenge 1：实现并测试 Copy-on-Write（COW），分析相关页面状态与 Dirty COW 问题。 | 编写模块三与 Challenge 1 的设计、提示词、迭代过程、测试结果及分析。 |
-| 2410439-吴佳璐（C） | 功能模块四：进程退出与调度相关系统调用，包括 `do_exit()`、`do_yield()`、`do_kill()`；Challenge 2：分析用户程序预加载与通常程序加载方式的区别；分支任务：双重 GDB 调试，跟踪 `ecall`、`sret` 及 QEMU/TCG 执行过程；负责集成测试。 | 编写模块四、Challenge 2 和双重 GDB 调试记录；汇总运行及评分结果，整合测试章节与报告。 |
+| 2410826-马伊汀（B） | 功能模块三：进程复制，包括 `do_fork()`、`copy_mm()`、`dup_mmap()`、`copy_range()`；Challenge 1：实现并测试 Copy-on-Write（COW），分析相关页面状态与 Dirty COW 问题；集成测试与总评分。 | 编写模块三与 Challenge 1 的设计、提示词、迭代过程、测试结果及分析；汇总运行及评分结果。 |
+| 2410439-吴佳璐（C） | 功能模块四：进程退出与调度相关系统调用，包括 `do_exit()`、`do_yield()`、`do_kill()`；Challenge 2：分析用户程序预加载与通常程序加载方式的区别；分支任务：双重 GDB 调试，跟踪 `ecall`、`sret` 及 QEMU/TCG 执行过程。 | 编写模块四、Challenge 2 和双重 GDB 调试记录；整合测试章节与报告。 |
 
 
 ---
@@ -1486,6 +1486,269 @@ make -B -k obj/kern/process/proc.o obj/kern/mm/vmm.o obj/kern/mm/pmm.o
 
 ---
 
+### 扩展练习 Challenge 1：Copy-on-Write（COW）
+
+**负责人：** 2410826-马伊汀
+
+#### 1、功能描述
+
+本扩展练习在功能模块三的普通 `fork` 复制链上实现 COW，`dup_mmap()` 不再整页复制，而是让父子进程共享同一物理页，并把可写页的父子 PTE 都改成只读并置 `PTE_COW`；任一进程首次写入时触发 `CAUSE_STORE_PAGE_FAULT`，由 `do_pgfault()` 根据 `page->ref` 决定原地解除写保护还是分配新页复制，从而在保持写时隔离的同时减少 `fork` 的即时页复制开销。
+
+**修改清单：**
+
+| 文件 | 位置 | 修改内容 |
+| --- | --- | --- |
+| `kern/mm/mmu.h` | PTE 定义区 | 新增软件位 `PTE_COW = 0x200`（bit 9，硬件不可见） |
+| `kern/mm/vmm.h` | `dup_mmap` 声明之后 | 新增 `do_pgfault()` 声明 |
+| `kern/mm/vmm.c` | `dup_mmap()` | `copy_range(..., 0)` 改为 `share = 1` |
+| `kern/mm/vmm.c` | `dup_mmap()` 之后 | 新增 `do_pgfault()` |
+| `kern/mm/vmm.c` | `user_mem_check()` | `write = 1` 时先把范围内的 COW 页解开，避免内核写用户页触发内核态故障 |
+| `kern/mm/pmm.c` | `copy_range()` 的 `share == true` 分支 | 父子共享物理页并写保护，设置 `PTE_COW` |
+| `kern/trap/trap.c` | `exception_handler()` | 新增 `CAUSE_STORE_PAGE_FAULT` 分支 |
+| `user/cowtest.c` | 新增 | COW 正确性功能测试（5 个显式场景 + `init check memory pass.` 的内存回收检查） |
+| `user/cowbug.c` | 新增 | Dirty COW 后果模拟测试，配合缺陷开关 |
+
+所有新增代码均未删除或改写其他成员的 `lab5 function1/2/3/4` 注释，未修改 `do_exit()`、`do_yield()`、`do_kill()`、`do_wait()`、`mm_count` 语义及 `tools/grade.sh`。
+
+#### 2、设计目标与边界
+
+- 普通 `fork` 不再整页复制用户空间，可写页父子共享并写保护，首次写入时才分配私有副本。
+- 只读代码页保持普通只读共享，不设置 COW 位，对代码段的写操作被拒绝并使进程终止。
+- 只处理“页已映射、PTE 被写保护且带 `PTE_COW`”的写故障；本实验没有按需调页、swap、mmap、文件系统或 page cache，因此缺页、未映射页一律返回 `-E_INVAL`。
+- 嵌套 `fork` 必须保留 COW 状态，不能把 COW 页当成普通只读页。
+- 引用计数完全交给 `page_insert()` / `page_remove_pte()` 维护，`do_pgfault()` 不手工增减。
+- 不改变 `do_exit()` 中 `mm_count` 的递减与释放规则，COW 只影响 `page->ref`，不影响 `mm_count`。
+
+#### 3、页状态与转换
+
+##### （1）四种页状态
+
+| 状态 | PTE | `page->ref` | 含义 |
+| --- | --- | --- | --- |
+| **P-W** | `W=1, COW=0` | 1（通常） | 进程私有可写页 |
+| **S-RO** | `W=0, COW=1` | ≥ 1（共享时通常 ≥ 2） | 带 COW 位的只读映射，共享者退出后可能只剩 1 个引用 |
+| **RO** | `W=0, COW=0` | ≥ 1 | 普通只读页（代码段），共享但不 COW |
+| **UNMAPPED** | `V=0` | — | 未建立映射（含栈底保护页） |
+
+`PTE_COW` 是软件位，RISC-V 硬件忽略它；判断“已经是 COW 页”必须直接看原始 `*ptep`，因为 `perm = *ptep & PTE_USER` 会丢掉该位。
+
+##### （2）状态转换
+
+| 当前状态 | 事件 | 条件 | 结果状态 | 动作 |
+| --- | --- | --- | --- | --- |
+| P-W | `fork` | 父 PTE 可写 | 父、子均为 S-RO | 子先 `page_insert`，父再 `page_insert`；`page->ref +1`；两边 `W=0, COW=1` |
+| S-RO | `fork`（嵌套） | 父 PTE 带 COW | 父、子仍为 S-RO | 用原始 `*ptep` 检测 COW，保留 COW 位；`ref +1` |
+| RO | `fork` | 代码页 | 父、子仍为 RO | 不设 COW，仅共享；`ref +1` |
+| S-RO | 读 | — | S-RO | 无动作，COW 页本身可读 |
+| S-RO | 用户写故障 | `page->ref == 1` | P-W | 原地改 PTE 为可写、清 COW、刷新 TLB，不分配新页 |
+| S-RO | 用户写故障 | `page->ref > 1` | 当前进程 P-W，其他共享者仍 S-RO | 分配新页、整页复制、`page_insert` 新映射；旧页引用由 `page_insert` 递减 |
+| S-RO | 内核写用户页（如 `do_wait` 写 `code_store`） | `user_mem_check(..., write=1)` 发现 PTE 带 COW | P-W | 写前由 `user_mem_check` 调用 `do_pgfault` 解除写保护或复制 |
+| RO | 写 | 代码段 VMA 无 `VM_WRITE` | 进程终止 | `do_pgfault` 返回 `-E_INVAL`，置 `PF_EXITING` |
+| UNMAPPED | 写 | 无 PTE / 无 VMA | 进程终止 | 返回 `-E_INVAL`，不做按需调页 |
+| P-W / S-RO / RO | `exit` / `unmap` | — | UNMAPPED | `page->ref -1`，归零时释放物理页 |
+
+![COW 页状态转换图：P-W、S-RO、RO、UNMAPPED 之间的 fork、写故障和退出转换](images/challenge1-cow-states.png)
+
+#### 4、引用计数
+
+##### （1）page->ref
+
+| 操作 | `page->ref` 变化 |
+| --- | --- |
+| 可写页 `fork` | 父页 +0（同页重映射），子映射 +1，最终 1 → 2 |
+| 只读代码页 `fork` | 同上，最终 +1 |
+| 写故障且 `ref == 1` | 不变 |
+| 写故障且 `ref > 1` | 新页 0 → 1；旧页 2 → 1（`page_insert` 内部 `page_remove_pte`） |
+| 进程退出 `exit_mmap` | 每个映射 -1，最后一个映射撤销时释放 |
+
+`do_pgfault()` 中没有手工 `page_ref_inc/dec`；复制分支失败时只 `free_page(npage)` 释放本次刚分配、尚未插入的新页，旧页引用由 `page_insert()` 负责。
+
+##### （2）mm_count
+
+- 普通 `fork`：子进程新建 `mm`，`dup_mmap()` 成功后才 `mm_count_inc(mm)`，即子进程持有 1 个引用；父进程的 `mm_count` 不变。
+- `CLONE_VM`：`mm_count_inc(oldmm)`，与 COW 无关。
+- 进程退出：`do_exit()` 仍是“每进程递减一次，归零才 `exit_mmap/put_pgdir/mm_destroy`”。
+- COW 只把多个进程的虚拟地址映射到同一个物理页，`mm_count` 的语义（地址空间引用数）没有改变，因此不需要修改 `do_exit()`。
+
+#### 5、关键实现
+
+##### （1）`copy_range()` 的共享分支
+
+```c
+if ((perm & PTE_W) || (*ptep & PTE_COW))
+{
+    uint32_t shared_perm = (perm & ~PTE_W) | PTE_COW;
+
+    if (page_insert(to, page, start, shared_perm) != 0)   /* 子进程先 */
+        return -E_NO_MEM;
+    if (page_insert(from, page, start, shared_perm) != 0) /* 父进程再 */
+        return -E_NO_MEM;
+}
+else
+{
+    if (page_insert(to, page, start, perm) != 0)          /* 只读代码页 */
+        return -E_NO_MEM;
+}
+```
+
+`perm` 来自 `*ptep & PTE_USER`，不含 `PTE_COW`；因此嵌套 `fork` 判断 COW 必须使用原始 `*ptep`。
+
+##### （2）`dup_mmap()`
+
+只把每个 VMA 的 `copy_range(..., 0)` 改为 `copy_range(..., 1)`，VMA 的创建顺序、失败清理约定不变。
+
+##### （3）`do_pgfault()`
+
+```c
+la = ROUNDDOWN(addr, PGSIZE);
+vma = find_vma(mm, la);
+if (vma == NULL || vma->vm_start > la)   return -E_INVAL;
+if (!(vma->vm_flags & VM_WRITE))         return -E_INVAL;
+ptep = get_pte(mm->pgdir, la, 0);
+if (ptep == NULL || !(*ptep & PTE_V))    return -E_INVAL;
+if (!(*ptep & PTE_COW))                  return -E_INVAL;
+
+page = pte2page(*ptep);
+perm = (*ptep & (PTE_U | PTE_R | PTE_X)) | PTE_W;
+if (page_ref(page) == 1) {               /* 原地解除写保护 */
+    *ptep = pte_create(page2ppn(page), perm);
+    tlb_invalidate(mm->pgdir, la);
+    return 0;
+}
+npage = alloc_page();                    /* 复制私有副本 */
+if (npage == NULL) return -E_NO_MEM;
+memcpy(page2kva(npage), page2kva(page), PGSIZE);
+if (page_insert(mm->pgdir, npage, la, perm) != 0) {
+    free_page(npage);
+    return -E_NO_MEM;
+}
+return 0;
+```
+
+##### （4）`exception_handler()`
+
+- `CAUSE_STORE_PAGE_FAULT` 且用户态：调用 `do_pgfault(current->mm, tf->cause, tf->tval)`，成功则直接返回并重试原指令；失败打印现场并置 `PF_EXITING`，由 `trap()` 统一调用 `do_exit(-E_KILLED)`。
+- 不增加 `tf->epc += 4`。
+- 不处理 `CAUSE_LOAD_PAGE_FAULT`。
+- 内核态写故障一律打印现场并 `panic`，不按 COW 处理。
+
+##### （5）内核写用户 COW 页的衔接
+
+`do_wait()` 通过用户指针 `code_store` 写退出码，此时父进程的用户栈页可能仍是 COW 只读页；若直接写会触发内核态 store page fault。为保持“内核态写故障不按 COW 处理”的规则，`user_mem_check(mm, addr, len, write = 1)` 在通过 VMA 权限检查后，逐页检查该范围内的 PTE，只对“已映射且带 `PTE_COW`”的页调用 `do_pgfault()` 解除写保护或复制，这样后续内核写用户内存不会产生 COW 故障，`user_mem_check()` 的原有权限和范围语义不变，也不会为普通未映射页做按需调页。
+
+#### 6、Dirty COW 分析
+
+##### （1）CVE-2016-5195 的成因
+
+Linux 的私有只读文件映射在写入时本应“解除 COW 并生成私有副本”，漏洞利用 `madvise(MADV_DONTNEED)` 丢弃私有副本、再用 `/proc/self/mem` 写只读映射，在“解除 COW”和“回收私有副本”之间制造竞争窗口，使写入落到 page cache 的共享页，从而修改只读文件，并可能用于提权。
+
+##### （2）ucore 为什么不能原样复现
+
+ucore 没有文件系统、page cache、文件映射、`/proc/self/mem`、`madvise`，也没有多线程和同一地址空间内的并发写者；单核上 trap 处理期间中断关闭，检查和复制是原子的，缺少这些前置条件，无法复现 Linux 的竞争过程。
+
+##### （3）缺陷版本模拟的后果
+
+本任务模拟的是“写到共享页，使其他进程看到本不该看到的修改”这一类后果，而不是复现 Linux 的 race；缺陷版 `do_pgfault()` 在 `page_ref(page) > 1` 时没有复制，而是原地把共享物理页在当前进程 PTE 中改成可写并清除 COW，父进程的 PTE 仍指向同一物理页，因此能读到子进程的写入。
+
+##### （4）正确实现如何阻止
+
+1. `do_pgfault()` 要求 VMA 可写、PTE 有效且带 `PTE_COW`，否则拒绝。
+2. `page->ref > 1` 时强制分配新页并整页复制，绝不原地写共享页。
+3. `page_insert()` 把当前进程映射切换到私有新页，旧页引用递减。
+4. 只读代码页不设 COW，写入被 VMA 权限检查拒绝，进程终止，代码内容不变。
+5. 嵌套 `fork` 通过原始 `*ptep` 检测 COW 位并继续传递，避免把 COW 页误当成普通只读页共享。
+
+#### 7、缺陷版本
+
+- 开关：`COW_SIMULATE_DIRTYCOW`，默认不定义，默认构建始终是正确实现。
+- 构建与运行（直接指定 `DEFS`）：
+
+```bash
+make -B \
+  "DEFS+=-DTEST=cowbug -DTESTSTART=_binary_obj___user_cowbug_out_start \
+   -DTESTSIZE=_binary_obj___user_cowbug_out_size -DCOW_SIMULATE_DIRTYCOW=1"
+make qemu
+```
+
+正确内核下：
+
+```text
+cowbug: parent still reads 0x11223344, COW isolated the page.
+cowbug pass.
+init check memory pass.
+```
+
+缺陷内核下：
+
+```text
+cowbug: parent reads 0x55667788, the child's write reached the shared page!
+cowbug: Dirty COW consequence simulated by the defect kernel.
+init check memory pass.
+```
+
+两者对比说明：正确实现下父子隔离；缺陷实现下子进程的写穿透到共享物理页，模拟了 Dirty COW 的“写共享页”后果。该程序仅用于报告演示，不作为默认回归测试，`tools/grade.sh` 未包含它。
+
+#### 8、测试用例
+
+`user/cowtest.c` 覆盖以下场景：
+
+1. **子写父读。** 父进程 `fork()`，子进程修改全局变量并 `exit(0)`，父进程 `waitpid()` 后断言自己的值仍是原值。
+2. **父写子读。** 父进程 `fork()` 后修改全局变量，子进程读取自己的副本并断言仍是原值，父子用 `waitpid()` 收尾，不依赖谁先运行。
+3. **多子进程。** 连续 `fork()` 4 个子进程，每个子进程写入不同的值并断言自己读到的值，父进程等待全部子进程后断言自己的值不变。
+4. **嵌套 fork。** 子进程再 `fork()` 一个孙进程，子和孙分别写入并各自断言，父进程最后断言自己的值不变。
+5. **代码段写保护。** 子进程通过 `volatile` 指针写自己的代码页，正确实现下子进程被内核以 `-E_KILLED` 终止，父进程 `waitpid()` 得到 `code == -9`，代码内容不变。
+6. **退出回收。** 所有子进程退出后，父进程正常返回，最终出现 `cowtest pass.` 和 `init check memory pass.`。
+
+测试使用 `waitpid()`、`assert()` 和返回值判断，不依赖 `cprintf` 输出顺序，也不靠固定次数的 `yield()` 同步。
+
+#### 9、实现迭代过程
+
+本扩展练习已完成两轮迭代，第一轮实现 COW 主体并修复内核写用户 COW 页的问题，第二轮收紧代码段写保护的测试断言并对齐报告措辞。
+
+##### （1）第一次迭代
+
+**遇到的问题：**
+
+1. **内核态写用户 COW 页导致 panic。** `cowtest` 第一次运行时在 `do_wait()` 的 `*code_store = proc->exit_code` 处触发内核态 store page fault，`panic("store page fault in kernel mode")`；原因是父进程用户栈页在 `fork` 后是 COW 只读页，`waitpid()` 由内核直接写用户指针，而用户态代码在 `fork` 返回后并不一定先写该页，内核成为第一个写者。
+
+**问题解决策略：**
+
+- 在 `user_mem_check(..., write = 1)` 中，通过 VMA 检查后对范围内的 COW 页预先调用 `do_pgfault()` 解除写保护或复制；`do_wait()` 在写 `code_store` 前已经调用该检查，因此内核写用户页时不再触发内核态故障，`exception_handler()` 对内核态写故障仍然严格 panic，不把内核故障当作 COW。
+
+**本轮验证结果：**
+
+- `make -B -k obj/kern/mm/vmm.o obj/kern/mm/pmm.o obj/kern/trap/trap.o obj/user/cowtest.o obj/user/cowbug.o` 通过，无警告。
+- `make` 成功生成 `bin/kernel` / `bin/ucore.img`。
+- `cowtest` 连续运行 3 次，均输出 5 个场景的 `ok`、`code -9`、`cowtest pass.` 和 `init check memory pass.`。
+- 基础 `hello`、`exit`、`forktest`、`spin`、`badarg`、`waitkill`、`forktree` 均通过，`make grade` 在最终源码上得到 `Total Score: 130/130`。
+
+##### （2）第二次迭代
+
+**遇到的问题：**
+
+代码段写保护测试原来的断言是 `assert(code != 0)`，如果子进程的非法写意外成功、然后走到 `exit(1)`，父进程也会因为 `code == 1` 而通过，无法区分“被内核终止”和“自行退出”。
+
+**问题解决策略：**
+
+把断言收紧为 `assert(code == -9)`（`-E_KILLED`），明确要求子进程被内核终止；同时把报告中的“6 类 COW 功能测试”改为“5 个显式场景 + `init check memory pass.` 的内存回收检查”，把 S-RO 的引用计数说明改为“≥ 1（共享时通常 ≥ 2）”。
+
+**本轮验证结果：**
+
+`build-cowtest` 编译通过，无警告；重新运行 `cowtest` 仍然输出 `cowtest: read-only code write killed child (code -9).`、`cowtest pass.` 和 `init check memory pass.`，收紧后的断言通过，说明子进程确实是被内核以 `-E_KILLED` 终止，而不是自行 `exit(1)`。随后恢复默认构建，`make clean && make` 成功生成 `bin/kernel` / `bin/ucore.img`，内核代码本次未改动，之前最终源码上的 `make grade` 130/130 结果仍然有效。
+
+#### 10、最终提示词
+
+本扩展练习的完整提示词见 `report/Challenge1_COW_提示词.md`，完整设计报告见 `report/Challenge1_COW_设计报告.md`。提示词采用与功能模块一、二、三一致的 `[PROMPT]`、`[RELY]`、`[GUARANTEE]`、`[SPECIFICATION]` 四段式结构，核心约束包括：
+
+- `PTE_COW = 0x200`，`copy_range()` 共享分支对可写页或已 COW 页设置 `W=0, COW=1`，父子 PTE 都要改。
+- `do_pgfault()` 只处理已映射、带 COW 位、VMA 可写的写故障；`ref == 1` 原地解保护，`ref > 1` 分配新页复制。
+- `exception_handler()` 只增加用户态 `CAUSE_STORE_PAGE_FAULT` 分支，内核态写故障仍然 panic，不推进 `epc`。
+- 不修改 `do_exit()`、`do_yield()`、`do_kill()` 和 `mm_count` 语义，不实现按需调页、swap、mmap 或文件系统。
+- 默认构建必须是正确实现，Dirty COW 缺陷版本只能通过 `COW_SIMULATE_DIRTYCOW` 显式启用。
+- 测试必须覆盖子写父读、父写子读、多子进程、嵌套 fork、代码段写保护和退出回收，并如实区分编译、链接和运行结果。
+
+---
+
 ### Challenge 2：用户程序的预加载
 
 #### 问题
@@ -1674,6 +1937,80 @@ grep -nE 'undefined reference|do_exit|do_yield|do_kill' /tmp/lab5-link.log
 
 ![模块三分文件编译结果：proc.o、vmm.o、pmm.o 均编译通过，无新增警告或错误](images/lab5-module3-compile.png)
 
+---
+
+### 5.5 Challenge 1：COW 功能验证
+
+**负责人：** 2410826-马伊汀
+
+**测试目的：** 检查 COW 在真实 QEMU 运行中的父子隔离、代码段写保护、嵌套 fork 和退出回收，确认 COW 功能本身正确。
+
+**执行方法：** 在 WSL 中进入 `code` 目录，先分文件编译，再构建并运行 `cowtest`。
+
+```bash
+make -B -k obj/kern/mm/vmm.o obj/kern/mm/pmm.o obj/kern/trap/trap.o obj/user/cowtest.o obj/user/cowbug.o
+make build-cowtest
+make qemu
+```
+
+测试完成后内核进入 idle 循环，QEMU 命令由 `timeout` 结束，退出码 124 表示超时而非失败，结果以串口输出判定。
+
+**实际结果：**
+
+| 检查项 | 结果 | 说明 |
+| --- | --- | --- |
+| 分文件编译 | 通过 | `vmm.o`、`pmm.o`、`trap.o`、`cowtest.o`、`cowbug.o` 全部编译通过，无警告 |
+| 完整构建 | 通过 | `make` 成功生成 `bin/kernel` 和 `bin/ucore.img` |
+| COW 功能测试 | 通过 | `cowtest` 连续运行 3 次，5 个显式场景全部通过，代码段写保护子进程退出码为 `-9`，每次均出现 `cowtest pass.` 和 `init check memory pass.` |
+| 缺陷版本 | 通过（演示） | `COW_SIMULATE_DIRTYCOW` 下父进程读到子进程写入的 `0x55667788`，正确构建下读到的仍是 `0x11223344` |
+
+`cowtest` 的关键输出：
+
+```text
+kernel_execve: pid = 2, name = "cowtest".
+cowtest: starting COW tests.
+cowtest: child-write isolation ok.
+cowtest: parent-write isolation ok.
+cowtest: 4-children isolation ok.
+cowtest: nested-fork isolation ok.
+cowtest: read-only code write killed child (code -9).
+cowtest pass.
+init check memory pass.
+```
+
+**结果说明：** 从运行结果看，`cowtest` 的 5 个场景连续 3 次全部通过，代码段写保护的子进程退出码为 `-9`，说明非法写被内核以 `-E_KILLED` 终止，而不是自行 `exit(1)`；所有子进程回收后出现 `init check memory pass.`，说明共享页引用计数在退出路径上闭合；基础 lab5 回归与最终评分见 5.6；缺陷版本在 `COW_SIMULATE_DIRTYCOW` 下复现了父子共享页被写穿的后果，默认构建保持正确行为。
+
+截图中间出现的 trapframe 是子进程写代码页触发 store page fault 时 `exception_handler()` 打印的现场，属于预期行为；随后子进程以 `-9` 终止，父进程继续完成剩余测试。
+
+**测试截图：**
+
+![Challenge 1 COW 功能测试：5 个场景全部通过，代码段写保护子进程退出码 -9，cowtest pass 和 init check memory pass](images/challenge1-cowtest.png)
+
+### 5.6 集成测试与总评分
+
+**负责人：** 2410826-马伊汀
+
+**测试目的：** 在最终源码上执行完整评分，确认 Challenge 1 接入后 13 个评分程序仍然全部通过，并记录总评分。
+
+**执行方法：** 在 `code` 目录执行：
+
+```bash
+make grade
+```
+
+**实际结果：**
+
+| 检查项 | 结果 | 说明 |
+| --- | --- | --- |
+| 基础 lab5 回归 | 通过 | `hello`、`exit`、`forktest`、`spin`、`badarg`、`waitkill`、`forktree` 均正常，未出现 `fork claimed to work ... times!`、`wait stopped early`、`wait got too many` |
+| 评分程序 | 13/13 通过 | `badsegment`、`divzero`、`softint`、`faultread`、`faultreadkernel`、`hello`、`testbss`、`pgdir`、`yield`、`badarg`、`exit`、`spin`、`forktest` 全部 `check result / check output: OK` |
+| 总评分 | 130/130 | `Total Score: 130/130` |
+
+**结果说明：** 最终源码的完整评分全部通过，说明模块三的进程复制、模块四的进程控制和 Challenge 1 的 COW 接入后没有破坏基础 lab5 的功能；`forktest`、`exit`、`spin`、`badarg` 等 fork/wait 相关用例继续通过，`init check memory pass.` 仍然出现。
+
+**测试截图：**
+
+![完整评分结果：13 个评分程序全部 OK，Total Score 130/130](images/lab5-grade.png)
 
 ---
 

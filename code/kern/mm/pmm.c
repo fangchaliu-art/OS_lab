@@ -525,9 +525,34 @@ copy_range(pde_t *to, pde_t *from, uintptr_t start, uintptr_t end, bool share)
 
             if (share)
             {
-                if (page_insert(to, page, start, perm) != 0)
+                //challenge1 2410826: share the physical page instead of
+                //copying it; mark both PTEs COW if a write is possible.
+                //perm lost PTE_COW (PTE_USER does not contain it), so the
+                //"already COW" test must look at the raw *ptep.
+                if ((perm & PTE_W) || (*ptep & PTE_COW))
                 {
-                    return -E_NO_MEM;
+                    uint32_t shared_perm = (perm & ~PTE_W) | PTE_COW;
+
+                    /* child first: if it fails the parent is untouched */
+                    if (page_insert(to, page, start, shared_perm) != 0)
+                    {
+                        return -E_NO_MEM;
+                    }
+                    /* then write-protect the parent's mapping as well and
+                     * invalidate its TLB entry; page_insert() on the same
+                     * page leaves the reference count unchanged */
+                    if (page_insert(from, page, start, shared_perm) != 0)
+                    {
+                        return -E_NO_MEM;
+                    }
+                }
+                else
+                {
+                    /* read-only page (code): share it read-only, no COW */
+                    if (page_insert(to, page, start, perm) != 0)
+                    {
+                        return -E_NO_MEM;
+                    }
                 }
             }
             else

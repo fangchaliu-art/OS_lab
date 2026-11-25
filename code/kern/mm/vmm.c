@@ -227,9 +227,10 @@ dup_mmap(struct mm_struct *to, struct mm_struct *from)
         }
         insert_vma_struct(to, nvma);
 
-        /* copy this VMA's pages right away, no COW (share = false) */
+        /* challenge1 2410826: share the parent's pages and write-protect
+         * them (COW) instead of copying every page up front */
         if (copy_range(to->pgdir, from->pgdir,
-                       vma->vm_start, vma->vm_end, 0) != 0)
+                       vma->vm_start, vma->vm_end, 1) != 0)
         {
             return -E_NO_MEM;
         }
@@ -237,6 +238,88 @@ dup_mmap(struct mm_struct *to, struct mm_struct *from)
     return 0;
 }
 
+//challenge1 2410826
+/* do_pgfault - handle a user-mode write fault on a copy-on-write page
+ *
+ * Only already mapped, COW-marked pages inside a writable VMA are handled;
+ * there is no demand paging and no swap in this lab.  Returns 0 when the
+ * faulting instruction may be retried, a negative error code otherwise. */
+int
+do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr)
+{
+    struct vma_struct *vma;
+    struct Page *page, *npage;
+    pte_t *ptep;
+    uintptr_t la = ROUNDDOWN(addr, PGSIZE);
+    uint32_t perm;
+
+    (void)error_code;
+
+    if (mm == NULL)
+    {
+        return -E_INVAL;
+    }
+
+    /* the faulting address must belong to a VMA ... */
+    vma = find_vma(mm, la);
+    if (vma == NULL || vma->vm_start > la)
+    {
+        return -E_INVAL;
+    }
+    /* ... and writing must be allowed by that VMA (code is read-only) */
+    if (!(vma->vm_flags & VM_WRITE))
+    {
+        return -E_INVAL;
+    }
+
+    /* COW only resolves existing mappings, never a missing page */
+    ptep = get_pte(mm->pgdir, la, 0);
+    if (ptep == NULL || !(*ptep & PTE_V))
+    {
+        return -E_INVAL;
+    }
+    /* a plain read-only page is not a COW page */
+    if (!(*ptep & PTE_COW))
+    {
+        return -E_INVAL;
+    }
+
+    page = pte2page(*ptep);
+    /* keep U/R/X, add W and drop COW; pte_create() restores V */
+    perm = (*ptep & (PTE_U | PTE_R | PTE_X)) | PTE_W;
+
+#ifdef COW_SIMULATE_DIRTYCOW
+    /*challenge1 2410826 (defect demo, off by default): wrongly un-protect
+     * the still-shared physical page in place.  The other process keeps
+     * mapping the same page, so it observes this process's write -- the
+     * Dirty COW consequence class, not a reproduction of the Linux race. */
+    *ptep = pte_create(page2ppn(page), perm);
+    tlb_invalidate(mm->pgdir, la);
+    return 0;
+#endif
+
+    /* sole owner: un-protect in place, no allocation needed */
+    if (page_ref(page) == 1)
+    {
+        *ptep = pte_create(page2ppn(page), perm);
+        tlb_invalidate(mm->pgdir, la);
+        return 0;
+    }
+
+    /* still shared: give this process a private copy and remap it */
+    npage = alloc_page();
+    if (npage == NULL)
+    {
+        return -E_NO_MEM;
+    }
+    memcpy(page2kva(npage), page2kva(page), PGSIZE);
+    if (page_insert(mm->pgdir, npage, la, perm) != 0)
+    {
+        free_page(npage);
+        return -E_NO_MEM;
+    }
+    return 0;
+}
 
 void exit_mmap(struct mm_struct *mm)
 {
@@ -388,6 +471,25 @@ bool user_mem_check(struct mm_struct *mm, uintptr_t addr, size_t len, bool write
                 }
             }
             start = vma->vm_end;
+        }
+        //challenge1 2410826: a writable user range may contain COW pages.
+        //Kernel-side writes (do_wait() storing code_store, copy_to_user())
+        //must not fault in S-mode, so resolve those pages here first.  Only
+        //already mapped, COW-marked pages are touched; nothing else changes.
+        if (write)
+        {
+            uintptr_t p;
+            for (p = ROUNDDOWN(addr, PGSIZE); p < end; p += PGSIZE)
+            {
+                pte_t *ptep = get_pte(mm->pgdir, p, 0);
+                if (ptep != NULL && (*ptep & PTE_V) && (*ptep & PTE_COW))
+                {
+                    if (do_pgfault(mm, 0, p) != 0)
+                    {
+                        return 0;
+                    }
+                }
+            }
         }
         return 1;
     }

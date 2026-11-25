@@ -175,6 +175,30 @@ void exception_handler(struct trapframe *tf)
         tf->epc += 4;
         syscall();
         break;
+    //challenge1 2410826: COW write fault (tval holds the faulting address)
+    case CAUSE_STORE_PAGE_FAULT:
+        /* kernel-mode faults are real bugs, never COW */
+        if (trap_in_kernel(tf))
+        {
+            print_trapframe(tf);
+            panic("store page fault in kernel mode");
+        }
+        /* user-mode COW page: un-protect or copy, then retry the store */
+        if (current != NULL && current->mm != NULL &&
+            do_pgfault(current->mm, tf->cause, tf->tval) == 0)
+        {
+            /* retry the faulting instruction: epc must not be advanced */
+            break;
+        }
+        /* unresolved user fault: terminate this process via trap()'s
+         * PF_EXITING path instead of scheduling from here */
+        print_trapframe(tf);
+        if (current == NULL)
+        {
+            panic("store page fault without a current process");
+        }
+        current->flags |= PF_EXITING;
+        break;
     default:
         print_trapframe(tf);
         panic("unknown exception");

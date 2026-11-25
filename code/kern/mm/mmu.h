@@ -79,6 +79,8 @@
 #define PTE_A 0x040    // Accessed
 #define PTE_D 0x080    // Dirty
 #define PTE_SOFT 0x300 // Reserved for Software
+//challenge1 2410826: copy-on-write marker, bit 9 of PTE_SOFT, never visible to hardware
+#define PTE_COW 0x200  // Copy-on-Write (read-only mapping shared until a write)
 
 #define PAGE_TABLE_DIR (PTE_V)
 #define READ_ONLY (PTE_R | PTE_V)
