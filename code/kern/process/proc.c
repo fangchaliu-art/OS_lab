@@ -1021,7 +1021,133 @@ bad_fork_cleanup_proc:
 }
 
 
-//lab5 function4 YOUR CODE
+//lab5 function4 2412084
+/* do_exit - terminate the current process and become a zombie
+ *
+ * The user address space is released before the zombie state is published,
+ * so do_wait() can never free this PCB and kernel stack while this function
+ * is still running on that stack.  The PCB and kernel stack stay alive here
+ * and are reclaimed by the parent's do_wait(). */
+int
+do_exit(int error_code)
+{
+    struct proc_struct *proc;
+    bool intr_flag;
+
+    /* idle and init are the schedulers' fallback and the orphan reaper */
+    if (current == idleproc || current == initproc)
+    {
+        panic("do_exit: idleproc/initproc must not exit.\n");
+    }
+
+    /* step 1: leave the old page table, then release the mm reference.
+     * A shared mm (CLONE_VM) is only detached, never destroyed here. */
+    if (current->mm != NULL)
+    {
+        struct mm_struct *mm = current->mm;
+
+        lsatp(boot_pgdir_pa);
+        flush_tlb();
+        current->pgdir = boot_pgdir_pa;
+        current->mm = NULL;
+
+        if (mm_count_dec(mm) == 0)
+        {
+            exit_mmap(mm);
+            put_pgdir(mm);
+            mm_destroy(mm);
+        }
+    }
+
+    /* step 2: publish the exit state, hand children to init and wake up
+     * waiters in one interrupt-protected region, then never come back */
+    local_intr_save(intr_flag);
+    {
+        current->state = PROC_ZOMBIE;
+        current->exit_code = error_code;
+
+        proc = current->parent;
+        if (proc != NULL && proc->wait_state == WT_CHILD)
+        {
+            wakeup_proc(proc);
+        }
+
+        while (current->cptr != NULL)
+        {
+            proc = current->cptr;
+            current->cptr = proc->optr;
+
+            proc->yptr = NULL;
+            if ((proc->optr = initproc->cptr) != NULL)
+            {
+                initproc->cptr->yptr = proc;
+            }
+            proc->parent = initproc;
+            initproc->cptr = proc;
+
+            /* the adopted child may already be a zombie */
+            if (proc->state == PROC_ZOMBIE && initproc->wait_state == WT_CHILD)
+            {
+                wakeup_proc(initproc);
+            }
+        }
+
+        schedule();
+    }
+    local_intr_restore(intr_flag);
+
+    panic("do_exit: zombie process %d was scheduled again.\n", current->pid);
+    return 0;
+}
+
+/* do_yield - mark current as needing rescheduling, the trap return path
+ * performs the actual switch */
+int
+do_yield(void)
+{
+    current->need_resched = 1;
+    return 0;
+}
+
+/* do_kill - mark the target as exiting and wake it if it is interruptibly
+ * waiting; the target itself runs do_exit(-E_KILLED) later */
+int
+do_kill(int pid)
+{
+    struct proc_struct *proc;
+    bool intr_flag;
+    int ret;
+
+    /* lookup, flag test and update must be one atomic step: do_fork() and
+     * do_wait() may change the hash list and process state concurrently */
+    local_intr_save(intr_flag);
+    {
+        proc = find_proc(pid);
+        if (proc == NULL)
+        {
+            ret = -E_INVAL;
+        }
+        else if (proc->flags & PF_EXITING)
+        {
+            ret = -E_KILLED;
+        }
+        else
+        {
+            proc->flags |= PF_EXITING;
+            /* wake only interruptible sleepers; a runnable target keeps
+             * running and notices the flag on its own, a zombie must not
+             * reach wakeup_proc()'s assertion */
+            if (proc != current && proc->state == PROC_SLEEPING &&
+                (proc->wait_state & WT_INTERRUPTED))
+            {
+                wakeup_proc(proc);
+            }
+            ret = 0;
+        }
+    }
+    local_intr_restore(intr_flag);
+    return ret;
+}
 
 
 #define __KERNEL_EXECVE(name, binary, size) ({           \
